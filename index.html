@@ -3,32 +3,20 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CCDC HSE — Equipment Inspection</title>
+<meta name="theme-color" content="#1b2630">
+<title>CCDC HSE — Equipment inspection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
 </head>
 <body>
-<div class="shell">
-  <aside class="sidebar">
-    <div class="brand"><div class="brand-mark">HSE</div>
-      <div><div class="brand-title">CCDC Equipment Inspection</div><div class="brand-sub">Crane &amp; forklift joint review</div></div></div>
-    <nav class="nav">
-      <button class="nav-item active" data-view="matrix"><span class="nav-dot"></span>Equipment Status</button>
-      <button class="nav-item" data-view="new"><span class="nav-dot"></span>Send Photos</button>
-      <button class="nav-item" data-view="queue"><span class="nav-dot"></span>Review Queue</button>
-      <button class="nav-item" data-view="register"><span class="nav-dot"></span>Equipment Register</button>
-    </nav>
-    <div class="me" id="me"></div>
-    <div class="sidebar-footer"><div id="conn" class="conn">Connecting…</div></div>
-  </aside>
-  <main class="main">
-    <header class="view-header"><h1 id="title"></h1></header>
-    <div id="body"></div>
-  </main>
-</div>
-<div id="toast" class="toast-stack"></div>
+<div id="root"></div>
+<div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+<noscript>This app needs JavaScript.</noscript>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="config.js"></script>
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
