@@ -22,6 +22,7 @@ These are in the database, not just the screen, so they cannot be bypassed from 
 - Every serial number can be registered once.
 - Photos and videos are private, checked on submit (must be real files for that machine) and limited to 50 MB.
 - Every action is recorded in a history that cannot be edited.
+- Nothing is lost if the app is closed or the connection drops: photos, videos, notes and readings are saved on the phone as they are added. Reopening the app restores the draft, and a failed send resumes without re-uploading files that already went through.
 
 ## Set up
 1. The database is already migrated (`supabase/migrations/20261123_joint_inspection.sql`).

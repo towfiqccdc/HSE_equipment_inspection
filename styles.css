@@ -156,7 +156,8 @@ a.tagcard:hover { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(20,30
 .reading { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 14px; }
 .reading input { width: 110px; }
 .submitbar { position: sticky; bottom: var(--navh); background: var(--steel-900); color: #fff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 18px; z-index: 5; }
-.submitbar span { font: 600 18px var(--cond); }
+.submitbar #n-count { font: 600 18px var(--cond); }
+.submitbar small { display: block; color: var(--steel-300); font-size: 13px; min-height: 1em; }
 
 /* severity */
 .sevchip { font: 600 14px var(--cond); padding: 3px 10px; border-radius: 3px; background: var(--sc); color: var(--sf, #fff); }

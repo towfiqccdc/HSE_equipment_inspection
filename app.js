@@ -332,10 +332,44 @@ async function pool(items, n, fn) {
   if (errs.length) throw errs[0];
 }
 const extFor = (f, kind) => kind === 'photo' ? 'jpg' : ({ 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' }[f.type] || 'mp4');
-async function prepareUpload(f, kind) {
-  if (kind === 'photo') return { blob: await shrink(f.file), type: 'image/jpeg' };
-  return { blob: f.file, type: f.file.type };
+// Photos are shrunk once, when added, so a draft saved on the phone stays small.
+async function readyFile(file, kind) {
+  if (kind === 'photo') return { blob: await shrink(file), type: 'image/jpeg' };
+  return { blob: file, type: file.type };
 }
+const prepareUpload = async f => ({ blob: f.blob, type: f.type });
+const withUrl = f => ({ ...f, url: URL.createObjectURL(f.blob) });
+const plain = f => ({ id: f.id, kind: f.kind, type: f.type, blob: f.blob });
+
+/* ---------- drafts saved on this device, so closing the app loses nothing ---------- */
+let _db = null;
+function idb() {
+  if (!_db) {
+    _db = new Promise((res, rej) => {
+      if (!window.indexedDB) return rej(new Error('no storage'));
+      const r = indexedDB.open('hse-drafts', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('drafts', { keyPath: 'key' });
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  }
+  return _db;
+}
+async function draftGet(key) {
+  try { const db = await idb(); return await new Promise((res, rej) => { const r = db.transaction('drafts').objectStore('drafts').get(key); r.onsuccess = () => res(r.result || null); r.onerror = () => rej(r.error); }); }
+  catch (e) { return null; }
+}
+async function draftPut(key, val) {
+  try { const db = await idb(); await new Promise((res, rej) => { const tx = db.transaction('drafts', 'readwrite'); tx.objectStore('drafts').put({ ...val, key, updated: Date.now() }); tx.oncomplete = res; tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); }); return true; }
+  catch (e) { return false; }
+}
+async function draftDel(key) {
+  try { const db = await idb(); await new Promise((res, rej) => { const tx = db.transaction('drafts', 'readwrite'); tx.objectStore('drafts').delete(key); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); } catch (e) { /* nothing to delete */ }
+}
+let _warnedSave = false;
+function saveWarn() { if (!_warnedSave) { _warnedSave = true; toast(T('draft.cannot_save'), 1); } }
+const later = (fn, ms = 500) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
+if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
 VIEWS.submit = async (arg, tok) => {
   const [rows, cl] = await Promise.all([q(sb.from('equipment_overview').select('*').order('tag')), loadChecklist()]);
@@ -350,13 +384,21 @@ VIEWS.submit = async (arg, tok) => {
   if (!sel) { $('#n-form').innerHTML = `<div class="empty"><p>${esc(T('submit.none_free'))}</p></div>`; return; }
 
   async function drawForm(eq) {
-    if (!S.draft || S.draft.eq.id !== eq.id) S.draft = { eq, id: uid8() + uid8(), items: {} };
+    const dkey = `insp:${S.uid}:${eq.id}`;
+    if (!S.draft || S.draft.eq.id !== eq.id) {
+      const saved = await draftGet(dkey);
+      S.draft = { eq, id: (saved && saved.draftId) || uid8() + uid8(), items: {}, uploaded: (saved && saved.uploaded) || {}, restored: 0 };
+      if (saved) Object.entries(saved.items || {}).forEach(([k, it]) => {
+        S.draft.items[k] = { note: it.note || '', reading: it.reading || '', files: (it.files || []).map(withUrl) };
+        S.draft.restored += S.draft.items[k].files.length;
+      });
+    }
     const list = cl.filter(c => c.equipment_type === eq.type);
-    let banner = '';
+    let banner = S.draft.restored ? `<div class="alert ok">${esc(T('draft.restored', { n: S.draft.restored }))}</div>` : '';
     if (eq.stage === 'info_requested' && eq.inspection_id) {
       try {
         const prev = await q(sb.from('inspections').select('contractor_message').eq('id', eq.inspection_id).single());
-        banner = `<div class="alert warn"><b>${esc(T('submit.resubmit'))}</b><p class="pre">${esc(prev.contractor_message || '')}</p><p>${esc(T('submit.resubmit_help', { n: (eq.version || 0) + 1 }))}</p></div>`;
+        banner += `<div class="alert warn"><b>${esc(T('submit.resubmit'))}</b><p class="pre">${esc(prev.contractor_message || '')}</p><p>${esc(T('submit.resubmit_help', { n: (eq.version || 0) + 1 }))}</p></div>`;
       } catch (e) { /* message is optional */ }
     }
     $('#n-form').innerHTML = `${banner}${list.map(c => {
@@ -370,49 +412,62 @@ VIEWS.submit = async (arg, tok) => {
         ${rl ? `<label class="reading"><span>${esc(rl)}</span><input data-reading="${esc(c.key)}" maxlength="20" inputmode="decimal"> ${esc(c.reading_unit || '')}</label>` : ''}
       </section>`;
     }).join('')}
-    <div class="submitbar"><span id="n-count"></span><button class="btn primary" id="n-go">${esc(T('submit.send'))}</button></div>`;
+    <div class="submitbar"><div><span id="n-count"></span><small id="n-saved"></small></div><button class="btn primary" id="n-go">${esc(T('submit.send'))}</button></div>`;
 
     const required = list.filter(c => c.required);
     const itemOf = k => (S.draft.items[k] ||= { files: [], note: '', reading: '' });
     const ready = () => required.filter(c => itemOf(c.key).files.length > 0).length;
     const bar = () => { $('#n-count').textContent = T('submit.ready', { a: ready(), b: required.length }); $('#n-go').disabled = ready() < required.length; };
+    const snapshot = () => ({ eqId: eq.id, draftId: S.draft.id, uploaded: S.draft.uploaded, items: Object.fromEntries(Object.entries(S.draft.items).map(([k, it]) => [k, { note: it.note, reading: it.reading, files: it.files.map(plain) }])) });
+    const save = async () => {
+      const ok = await draftPut(dkey, snapshot());
+      const el = $('#n-saved'); if (el) el.textContent = ok ? T('draft.saved') : '';
+      if (!ok) saveWarn();
+    };
+    const saveSoon = later(save);
     const thumbs = key => {
       const box = $(`[data-th="${key}"]`); const d = itemOf(key);
       box.innerHTML = d.files.map(f => `<div class="th">${f.kind === 'video' ? `<video src="${esc(f.url)}" muted playsinline preload="metadata"></video>` : `<img src="${esc(f.url)}" alt="">`}<button type="button" data-rm="${esc(f.id)}" aria-label="${esc(T('submit.remove'))}">×</button></div>`).join('');
-      $$('[data-rm]', box).forEach(b => b.onclick = () => { const i = d.files.findIndex(x => x.id === b.dataset.rm); if (i >= 0) { URL.revokeObjectURL(d.files[i].url); d.files.splice(i, 1); } thumbs(key); bar(); });
+      $$('[data-rm]', box).forEach(b => b.onclick = () => { const i = d.files.findIndex(x => x.id === b.dataset.rm); if (i >= 0) { URL.revokeObjectURL(d.files[i].url); d.files.splice(i, 1); } thumbs(key); bar(); save(); });
     };
     list.forEach(c => {
       const d = itemOf(c.key);
       thumbs(c.key);
-      const note = $(`[data-note="${c.key}"]`); note.value = d.note; note.oninput = () => { d.note = note.value; };
-      const rd = $(`[data-reading="${c.key}"]`); if (rd) { rd.value = d.reading; rd.oninput = () => { d.reading = rd.value; }; }
-      $(`[data-pick="${c.key}"]`).onchange = e => {
-        for (const f of e.target.files) {
+      const note = $(`[data-note="${c.key}"]`); note.value = d.note; note.oninput = () => { d.note = note.value; saveSoon(); };
+      const rd = $(`[data-reading="${c.key}"]`); if (rd) { rd.value = d.reading; rd.oninput = () => { d.reading = rd.value; saveSoon(); }; }
+      $(`[data-pick="${c.key}"]`).onchange = async e => {
+        const picked = [...e.target.files]; e.target.value = '';
+        for (const f of picked) {
           if (c.kind === 'photo' && !f.type.startsWith('image/')) { toast(T('err.not_image'), 1); continue; }
           if (c.kind === 'video' && !f.type.startsWith('video/')) { toast(T('err.not_video'), 1); continue; }
           if (c.kind === 'video' && f.size > 40 * 1024 * 1024) { toast(T('err.video_big'), 1); continue; }
           if (d.files.length >= 8) { toast(T('err.too_many'), 1); break; }
-          d.files.push({ id: uid8(), file: f, url: URL.createObjectURL(f), kind: c.kind });
+          try { const r = await readyFile(f, c.kind); d.files.push(withUrl({ id: uid8(), kind: c.kind, type: r.type, blob: r.blob })); }
+          catch (er) { toast(T('err.photo_read'), 1); }
         }
-        e.target.value = ''; thumbs(c.key); bar();
+        thumbs(c.key); bar(); save();
       };
     });
     bar();
+    if (S.draft.restored) save();
     $('#n-go').onclick = async () => {
       const btn = $('#n-go'); btn.disabled = true;
       const jobs = [];
-      list.forEach(c => itemOf(c.key).files.forEach(f => jobs.push({ c, f, path: `${eq.id}/${S.draft.id}/${c.key}-${f.id}.${extFor(f.file, c.kind)}` })));
-      let done = 0;
+      list.forEach(c => itemOf(c.key).files.forEach(f => jobs.push({ c, f, path: `${eq.id}/${S.draft.id}/${c.key}-${f.id}.${extFor(f, c.kind)}` })));
+      let done = jobs.filter(j => S.draft.uploaded[j.f.id]).length;
       const prog = () => { btn.textContent = T('submit.uploading', { a: done, b: jobs.length }); };
       prog();
       try {
-        await pool(jobs, 3, async j => { const { blob, type } = await prepareUpload(j.f, j.c.kind); await uploadFile(j.path, blob, type); done++; prog(); });
+        await pool(jobs.filter(j => !S.draft.uploaded[j.f.id]), 3, async j => {
+          const { blob, type } = await prepareUpload(j.f); await uploadFile(j.path, blob, type);
+          S.draft.uploaded[j.f.id] = j.path; done++; prog(); await draftPut(dkey, snapshot());
+        });
         const items = list.map(c => {
           const d = itemOf(c.key);
           return { key: c.key, files: jobs.filter(j => j.c.key === c.key).map(j => j.path), note: d.note.trim(), reading: (d.reading || '').trim() };
         }).filter(i => i.files.length);
         const id = await q(sb.rpc('submit_inspection', { p_equipment_id: eq.id, p_items: items }));
-        S.draft = null; toast(T('submit.sent'));
+        await draftDel(dkey); S.draft = null; toast(T('submit.sent'));
         location.hash = '#/inspection/' + id;
       } catch (e) { fail(e); btn.disabled = false; btn.textContent = T('submit.send'); }
     };
@@ -464,28 +519,36 @@ function bindCond(root, reload) {
   $$('[data-cond]', root).forEach(card => {
     const id = card.dataset.cond, eqId = card.dataset.eq;
     const files = [];
+    const pkey = `proof:${S.uid}:${id}`;
     const th = $('[data-proofthumbs]', card);
-    const drawTh = () => { if (th) th.innerHTML = files.map(f => `<div class="th">${f.kind === 'video' ? `<video src="${esc(f.url)}" muted playsinline preload="metadata"></video>` : `<img src="${esc(f.url)}" alt="">`}<button type="button" data-rm="${esc(f.id)}">×</button></div>`).join(''); $$('[data-rm]', th).forEach(b => b.onclick = () => { const i = files.findIndex(x => x.id === b.dataset.rm); if (i >= 0) { URL.revokeObjectURL(files[i].url); files.splice(i, 1); drawTh(); } }); };
+    const noteEl = $('[data-proofnote]', card);
+    const pSave = async () => { if (!th) return; if (!(await draftPut(pkey, { files: files.map(plain), note: noteEl ? noteEl.value : '' }))) saveWarn(); };
+    const pSaveSoon = later(pSave);
+    const drawTh = () => { if (th) th.innerHTML = files.map(f => `<div class="th">${f.kind === 'video' ? `<video src="${esc(f.url)}" muted playsinline preload="metadata"></video>` : `<img src="${esc(f.url)}" alt="">`}<button type="button" data-rm="${esc(f.id)}">×</button></div>`).join(''); $$('[data-rm]', th).forEach(b => b.onclick = () => { const i = files.findIndex(x => x.id === b.dataset.rm); if (i >= 0) { URL.revokeObjectURL(files[i].url); files.splice(i, 1); drawTh(); pSave(); } }); };
+    if (th) draftGet(pkey).then(saved => { if (saved) { (saved.files || []).forEach(f => files.push(withUrl(f))); if (noteEl && saved.note) noteEl.value = saved.note; drawTh(); } });
+    if (noteEl) noteEl.oninput = pSaveSoon;
     const pick = $('[data-proofpick]', card);
-    if (pick) pick.onchange = e => {
-      for (const f of e.target.files) {
+    if (pick) pick.onchange = async e => {
+      const picked = [...e.target.files]; e.target.value = '';
+      for (const f of picked) {
         const kind = f.type.startsWith('video/') ? 'video' : f.type.startsWith('image/') ? 'photo' : null;
         if (!kind) { toast(T('err.not_image'), 1); continue; }
         if (kind === 'video' && f.size > 40 * 1024 * 1024) { toast(T('err.video_big'), 1); continue; }
         if (files.length >= 8) { toast(T('err.too_many'), 1); break; }
-        files.push({ id: uid8(), file: f, kind, url: URL.createObjectURL(f) });
+        try { const r = await readyFile(f, kind); files.push(withUrl({ id: uid8(), kind, type: r.type, blob: r.blob })); }
+        catch (er) { toast(T('err.photo_read'), 1); }
       }
-      e.target.value = ''; drawTh();
+      drawTh(); pSave();
     };
     $$('[data-act]', card).forEach(b => b.onclick = async () => {
       b.disabled = true;
       try {
         if (b.dataset.act === 'proof') {
           if (!files.length) throw new Error(T('cond.add_files'));
-          const paths = files.map(f => `${eqId}/proof-${id}/${f.id}.${extFor(f.file, f.kind)}`);
-          await pool(files.map((f, i) => ({ f, p: paths[i] })), 3, async j => { const { blob, type } = await prepareUpload(j.f, j.f.kind); await uploadFile(j.p, blob, type); });
+          const paths = files.map(f => `${eqId}/proof-${id}/${f.id}.${extFor(f, f.kind)}`);
+          await pool(files.map((f, i) => ({ f, p: paths[i] })), 3, async j => { const { blob, type } = await prepareUpload(j.f); await uploadFile(j.p, blob, type); });
           await q(sb.rpc('submit_condition_proof', { p_condition_id: id, p_files: paths, p_note: ($('[data-proofnote]', card).value || '').trim() }));
-          toast(T('cond.proof_sent'));
+          await draftDel(pkey); toast(T('cond.proof_sent'));
         } else {
           const approve = b.dataset.act === 'approve';
           await q(sb.rpc('review_condition', { p_condition_id: id, p_approve: approve, p_note: ($('[data-backnote]', card).value || '').trim() || null }));
