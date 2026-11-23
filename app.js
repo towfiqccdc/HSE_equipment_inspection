@@ -96,6 +96,8 @@ function bindLang() {
 }
 function renderAuth(mode = 'signin', note = '') {
   document.documentElement.lang = lang;
+  const testUsers = (window.CFG && CFG.TEST_MODE && CFG.TEST_USERS) || [];
+  const testPanel = testUsers.length ? `<div class="testbox"><h3>${esc(T('test.title'))}</h3><p>${esc(T('test.sub'))}</p><div class="testbtns">${testUsers.map((u, i) => `<button type="button" class="btn" data-test="${i}"><b>${esc(T('role.' + u.role))}</b>${u.company ? `<small>${esc(u.company)}</small>` : ''}</button>`).join('')}</div></div>` : '';
   $('#root').innerHTML = `<div class="authwrap">
     <section class="authart" aria-hidden="true">
       <div class="hangs"><span class="stag s-cleared">${esc(T('stage.cleared'))}</span><span class="stag s-conditional">${esc(T('stage.conditional'))}</span><span class="stag s-out_of_service">${esc(T('stage.out_of_service'))}</span></div>
@@ -103,6 +105,7 @@ function renderAuth(mode = 'signin', note = '') {
     </section>
     <section class="authcard">
       <div class="authtop">${brandMark()}${langSwitch()}</div>
+      ${testPanel}
       <div class="tabs"><button data-mode="signin" class="${mode === 'signin' ? 'on' : ''}">${esc(T('auth.signin'))}</button><button data-mode="signup" class="${mode === 'signup' ? 'on' : ''}">${esc(T('auth.signup'))}</button></div>
       ${note ? `<div class="alert ok">${esc(note)}</div>` : ''}
       <form id="authform" class="form" novalidate>
@@ -119,6 +122,12 @@ function renderAuth(mode = 'signin', note = '') {
   bindLang();
   $$('[data-mode]').forEach(b => b.onclick = () => renderAuth(b.dataset.mode));
   const showErr = m => { const e = $('#a-err'); e.textContent = m; e.hidden = !m; };
+  $$('[data-test]').forEach(b => b.onclick = async () => {
+    const u = testUsers[Number(b.dataset.test)];
+    $$('[data-test]').forEach(x => { x.disabled = true; });
+    const { error } = await sb.auth.signInWithPassword({ email: u.email, password: u.password });
+    if (error) { showErr(error.message); $$('[data-test]').forEach(x => { x.disabled = false; }); }
+  });
   if (mode === 'signup') {
     const sync = () => { $('#a-cowrap').hidden = $('#a-role').value !== 'contractor'; };
     $('#a-role').onchange = sync; sync();

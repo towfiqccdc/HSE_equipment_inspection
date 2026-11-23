@@ -82,6 +82,12 @@ input[type=checkbox], input[type=radio] { width: auto; min-height: 0; }
 .langs button.on { background: currentColor; }
 .langs button.on { color: var(--paper); background: var(--steel-700); }
 
+.testbox { border: 2px dashed var(--orange); background: #fff6ec; padding: 14px 16px 16px; margin-bottom: 20px; }
+.testbox h3 { font-size: 22px; } .testbox p { margin: 2px 0 12px; color: var(--steel-700); }
+.testbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.testbtns .btn { flex-direction: column; gap: 0; align-items: flex-start; min-height: 52px; text-align: left; }
+.testbtns .btn small { font-weight: 400; color: var(--muted); }
+
 /* shell */
 .shell { display: grid; grid-template-columns: 252px 1fr; min-height: 100vh; }
 .topbar { display: none; }

@@ -24,6 +24,15 @@ These are in the database, not just the screen, so they cannot be bypassed from 
 - Every action is recorded in a history that cannot be edited.
 - Nothing is lost if the app is closed or the connection drops: photos, videos, notes and readings are saved on the phone as they are added. Reopening the app restores the draft, and a failed send resumes without re-uploading files that already went through.
 
+## Testing mode (on now)
+The login page shows one-tap buttons: Contractor, a second Contractor, HSE, Operations and Admin. No email or password is typed. Sign out to switch to another role.
+
+These are real accounts with a password that is written in `config.js`, which is public. Anyone who opens the page can use them. That is fine for test data only. **Before real use:** set `TEST_MODE: false` in `config.js` and delete the test accounts in the Supabase SQL editor:
+
+```sql
+delete from auth.users where email like '%.test@example.com';
+```
+
 ## Set up
 1. The database is already migrated (`supabase/migrations/20261123_joint_inspection.sql`).
 2. In Supabase, open Authentication and either turn off "Confirm email" or set the Site URL to where you host the app, so sign-up links work.
