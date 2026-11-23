@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CCDC HSE — Equipment Inspection</title>
+<link rel="stylesheet" href="styles.css">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark">HSE</div>
+      <div><div class="brand-title">CCDC Equipment Inspection</div><div class="brand-sub">Crane &amp; forklift joint review</div></div></div>
+    <nav class="nav">
+      <button class="nav-item active" data-view="matrix"><span class="nav-dot"></span>Equipment Status</button>
+      <button class="nav-item" data-view="new"><span class="nav-dot"></span>Send Photos</button>
+      <button class="nav-item" data-view="queue"><span class="nav-dot"></span>Review Queue</button>
+      <button class="nav-item" data-view="register"><span class="nav-dot"></span>Equipment Register</button>
+    </nav>
+    <div class="me" id="me"></div>
+    <div class="sidebar-footer"><div id="conn" class="conn">Connecting…</div></div>
+  </aside>
+  <main class="main">
+    <header class="view-header"><h1 id="title"></h1></header>
+    <div id="body"></div>
+  </main>
+</div>
+<div id="toast" class="toast-stack"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
