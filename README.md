@@ -4,7 +4,7 @@ A simple tool for the HSE inspector to inspect cranes and forklifts, and to send
 
 1. The inspector opens **New inspection**, picks Crane or Forklift and fills in the machine details.
 2. They go through the checklist section by section. Each item gets a rating (OK, Minor, Major, Critical, N/A), any number of photos or short videos, and an optional note.
-3. At the bottom, **Others** takes any extra problem (with its own severity and photos). Then they choose the result: Accepted, Accepted with conditions, or Rejected. A critical finding forces Rejected.
+3. At the bottom, **Others** takes any extra problem (with its own severity and photos). The inspector does not choose a result. The Word report ends with a Decision page (Accepted / Accepted with conditions / Rejected tick boxes, conditions lines, and sign-off for HSE and Operations departments), which they complete after receiving it. The machine header is Brand, Model, Capacity, Location, Inspection date, Certificate expiry and Inspector.
 4. **Finish and create report** saves the inspection and makes a Word report (.docx) automatically, with the photos inside.
 5. **Download** the file, or **Share…** to send it through the phone's share sheet (WhatsApp, WeChat, email and so on). On a computer, Share downloads the file instead.
 
@@ -21,7 +21,7 @@ Everything typed or photographed is saved on the phone as it is added. If the ap
 
 ## What the database enforces
 - Only signed-in HSE inspectors and admins can see inspections and photos. Photos are private.
-- Every checklist item must be rated before an inspection can be saved. A critical item or observation means the result must be Rejected. "Accepted with conditions" needs the conditions written.
+- Every checklist item must be rated before an inspection can be saved. Brand is required. The database stores no verdict.
 - Photo and video files are checked on save (must belong to that inspection, must be real images or videos).
 - Only admins can change the checklist form.
 

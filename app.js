@@ -41,6 +41,8 @@ const fail = e => toast((e && e.message) || T('common.error'), 1);
 
 /* ---------- small UI pieces ---------- */
 const VKEY = { accept: 'cleared', conditions: 'conditional', reject: 'out_of_service' };
+const machineName = r => [r.brand, r.model].filter(Boolean).join(' ') || r.tag || '—';
+const worstSev = r => { const c = countSev(r); return c.critical ? 'out_of_service' : c.major ? 'conditional' : 'cleared'; };
 const verdictPill = v => `<span class="stag s-${esc(VKEY[v] || 'none')}">${esc(T('verdict.' + v))}</span>`;
 const isVideo = p => /\.(mp4|mov|webm)$/i.test(p);
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3) | 8).toString(16); }));
@@ -296,33 +298,32 @@ const draftKey = () => 'insp:' + S.uid;
 /* ---------- inspections list ---------- */
 function inspCard(r) {
   const c = countSev(r), issues = c.minor + c.major + c.critical;
-  return `<a class="tagcard s-${esc(VKEY[r.verdict])}" href="#/inspection/${esc(r.id)}">
-    <div class="tcstrip"><span class="hole"></span><span>${esc(T('verdict.' + r.verdict))}</span></div>
+  return `<a class="tagcard s-${worstSev(r)}" href="#/inspection/${esc(r.id)}">
+    <div class="tcstrip"><span class="hole"></span><span>${esc(T('type.' + r.equipment_type))}</span></div>
     <div class="tcbody">
-      <div class="tcnum"><b>${esc(r.tag)}</b></div>
-      <div class="tcsub">${esc(T('type.' + r.equipment_type))}${r.company ? ' — ' + esc(r.company) : ''}</div>
-      <div class="tcsub muted">${esc(r.serial || '')}${r.rig ? (r.serial ? ' / ' : '') + esc(r.rig) : ''}</div>
+      <div class="tcnum"><b>${esc(machineName(r))}</b></div>
+      <div class="tcsub">${esc([r.capacity, r.location].filter(Boolean).join(' — '))}</div>
       <div class="tcline"><span class="muted">${esc(T('card.date'))}</span><span>${esc(fmtDate(r.inspected_on))}</span></div>
       <div class="tcflags">${c.critical ? `<span class="bad">${esc(T('card.critical', { n: c.critical }))}</span>` : ''}${c.major ? `<span class="warn">${esc(T('card.major', { n: c.major }))}</span>` : ''}${c.minor ? `<span>${esc(T('card.minor', { n: c.minor }))}</span>` : ''}${issues ? '' : `<span class="okline">${esc(T('card.no_issues'))}</span>`}</div>
     </div></a>`;
 }
-const VCHIPS = ['all', 'accept', 'conditions', 'reject'];
+const VCHIPS = ['all', 'crane', 'forklift'];
 VIEWS.list = async (_, tok) => {
   const [rows, draft] = await Promise.all([
-    q(sb.from('inspections').select('id,tag,equipment_type,company,rig,serial,inspected_on,verdict,items,others,created_at').order('inspected_on', { ascending: false }).order('created_at', { ascending: false })),
+    q(sb.from('inspections').select('id,brand,model,capacity,location,equipment_type,inspected_on,items,others,created_at').order('inspected_on', { ascending: false }).order('created_at', { ascending: false })),
     draftGet(draftKey())
   ]);
-  const dhtml = draft ? `<div class="alert warn draftcard"><div><b>${esc(T('list.draft'))}</b><p>${esc((draft.d && draft.d.tag) || T('list.draft_untitled'))}</p></div><a class="btn primary" href="#/new">${esc(T('list.resume'))}</a></div>` : '';
+  const dhtml = draft ? `<div class="alert warn draftcard"><div><b>${esc(T('list.draft'))}</b><p>${esc((draft.d && [draft.d.brand, draft.d.model].filter(Boolean).join(' ')) || T('list.draft_untitled'))}</p></div><a class="btn primary" href="#/new">${esc(T('list.resume'))}</a></div>` : '';
   if (!paint(tok, T('nav.list'), `${dhtml}<div class="toolbar"><input id="search" type="search" placeholder="${esc(T('list.search'))}" value="${esc(S.search)}"><div id="chips" class="chips"></div></div><div id="board" class="board"></div>`)) return;
   const draw = () => {
     const term = S.search.trim().toLowerCase();
-    const base = rows.filter(r => !term || [r.tag, r.serial, r.company, r.rig].some(x => String(x || '').toLowerCase().includes(term)));
+    const base = rows.filter(r => !term || [r.brand, r.model, r.capacity, r.location].some(x => String(x || '').toLowerCase().includes(term)));
     $('#chips').innerHTML = VCHIPS.map(f => {
-      const n = base.filter(r => f === 'all' || r.verdict === f).length;
-      return `<button class="chip ${S.filter === f ? 'on' : ''} s-${f === 'all' ? 'all' : VKEY[f]}" data-f="${f}"><i></i>${esc(f === 'all' ? T('list.all') : T('verdict.' + f))} <b>${n}</b></button>`;
+      const n = base.filter(r => f === 'all' || r.equipment_type === f).length;
+      return `<button class="chip ${S.filter === f ? 'on' : ''} s-all" data-f="${f}"><i></i>${esc(f === 'all' ? T('list.all') : T('type.' + f))} <b>${n}</b></button>`;
     }).join('');
     $$('#chips .chip').forEach(b => b.onclick = () => { S.filter = b.dataset.f; draw(); });
-    const shown = base.filter(r => S.filter === 'all' || r.verdict === S.filter);
+    const shown = base.filter(r => S.filter === 'all' || r.equipment_type === S.filter);
     $('#board').innerHTML = shown.length ? shown.map(inspCard).join('')
       : `<div class="empty"><p>${esc(rows.length ? T('list.no_match') : T('list.empty'))}</p>${rows.length ? '' : `<a class="btn primary" href="#/new">${esc(T('nav.new'))}</a>`}</div>`;
   };
@@ -334,7 +335,7 @@ VIEWS.list = async (_, tok) => {
 /* ---------- new inspection ---------- */
 const SEVS = ['ok', 'minor', 'major', 'critical', 'na'];
 function newDraft() {
-  return { id: uuid(), type: 'crane', d: { tag: '', serial: '', company: '', rig: '', date: todayISO(), cert: '', inspector: (S.profile && S.profile.full_name) || '' }, items: {}, others: [], verdict: '', comment: '', conditions: '', uploaded: {} };
+  return { id: uuid(), type: 'crane', d: { brand: '', model: '', capacity: '', location: '', date: todayISO(), cert: '', inspector: (S.profile && S.profile.full_name) || '' }, items: {}, others: [], comment: '', uploaded: {} };
 }
 async function loadDraft() {
   if (S.draft && S.draft.uid === S.uid) return S.draft;
@@ -342,7 +343,7 @@ async function loadDraft() {
   const dr = newDraft();
   if (saved) {
     dr.id = saved.draftId || dr.id; dr.type = saved.type || 'crane'; dr.d = { ...dr.d, ...(saved.d || {}) };
-    dr.verdict = saved.verdict || ''; dr.comment = saved.comment || ''; dr.conditions = saved.conditions || ''; dr.uploaded = saved.uploaded || {};
+    dr.comment = saved.comment || ''; dr.uploaded = saved.uploaded || {};
     Object.entries(saved.items || {}).forEach(([k, it]) => { dr.items[k] = { sev: it.sev || '', note: it.note || '', reading: it.reading || '', files: (it.files || []).map(withUrl) }; });
     dr.others = (saved.others || []).map(o => ({ id: o.id, sev: o.sev || 'minor', note: o.note || '', files: (o.files || []).map(withUrl) }));
     dr.restored = true;
@@ -356,7 +357,7 @@ VIEWS.new = async (_, tok) => {
   const key = draftKey();
   const listFor = () => cl.filter(c => c.equipment_type === dr.type);
   const slot = k => k.startsWith('o_') ? dr.others.find(o => 'o_' + o.id === k) : (dr.items[k] ||= { sev: '', note: '', reading: '', files: [] });
-  const snapshot = () => ({ draftId: dr.id, type: dr.type, d: dr.d, verdict: dr.verdict, comment: dr.comment, conditions: dr.conditions, uploaded: dr.uploaded,
+  const snapshot = () => ({ draftId: dr.id, type: dr.type, d: dr.d, comment: dr.comment, uploaded: dr.uploaded,
     items: Object.fromEntries(Object.entries(dr.items).map(([k, it]) => [k, { sev: it.sev, note: it.note, reading: it.reading, files: it.files.map(plain) }])),
     others: dr.others.map(o => ({ id: o.id, sev: o.sev, note: o.note, files: o.files.map(plain) })) });
   const save = async () => {
@@ -399,20 +400,20 @@ VIEWS.new = async (_, tok) => {
       <section class="panel"><h3>${esc(T('new.details'))}</h3>
         <div class="seg" role="radiogroup" aria-label="${esc(T('new.type'))}">${['crane', 'forklift'].map(t => `<label><input type="radio" name="n-type" value="${t}" ${dr.type === t ? 'checked' : ''}><span>${esc(T('type.' + t))}</span></label>`).join('')}</div>
         <div class="fgrid">
-          ${f('d-tag', T('new.tag'), dr.d.tag, 'required')}${f('d-serial', T('new.serial'), dr.d.serial)}
-          ${f('d-company', T('new.company'), dr.d.company)}${f('d-rig', T('new.rig'), dr.d.rig)}
+          ${f('d-brand', T('new.brand'), dr.d.brand, 'required')}${f('d-model', T('new.model'), dr.d.model)}
+          ${f('d-capacity', T('new.capacity'), dr.d.capacity)}${f('d-location', T('new.location'), dr.d.location)}
           <label class="field"><span>${esc(T('new.date'))}</span><input id="d-date" type="date" value="${esc(dr.d.date)}"></label>
           <label class="field"><span>${esc(T('new.cert'))}</span><input id="d-cert" type="date" value="${esc(dr.d.cert)}"></label>
           ${f('d-inspector', T('new.inspector'), dr.d.inspector)}
         </div>
       </section>
-      <nav class="secnav" aria-label="${esc(T('new.sections'))}">${secs.map((g, i) => `<button type="button" data-jump="${i}">${esc(g.name)} <b data-secprog="${i}"></b></button>`).join('')}<button type="button" data-jump="others">${esc(T('new.others'))}</button><button type="button" data-jump="result">${esc(T('new.result'))}</button></nav>
+      <nav class="secnav" aria-label="${esc(T('new.sections'))}">${secs.map((g, i) => `<button type="button" data-jump="${i}">${esc(g.name)} <b data-secprog="${i}"></b></button>`).join('')}<button type="button" data-jump="others">${esc(T('new.others'))}</button><button type="button" data-jump="result">${esc(T('new.comment'))}</button></nav>
       ${secs.map((g, i) => `<h2 class="sechead" id="sec-${i}"><span>${esc(g.name)}</span><button type="button" class="btn sm" data-allok="${i}">${esc(T('new.all_ok'))}</button></h2>${g.items.map(x => itemHtml(x.c, x.n)).join('')}`).join('')}
       <h2 class="sechead" id="sec-others"><span>${esc(T('new.others'))}</span></h2>
       <p class="hint">${esc(T('new.others_help'))}</p>
       <div id="n-others">${dr.others.map(otherHtml).join('')}</div>
       <button type="button" class="btn addother" id="n-addother">+ ${esc(T('new.add_obs'))}</button>
-      <h2 class="sechead" id="sec-result"><span>${esc(T('new.result'))}</span></h2>
+      <h2 class="sechead" id="sec-result"><span>${esc(T('new.comment'))}</span></h2>
       <section class="panel" id="n-result"></section>
       <div class="submitbar"><div><span id="n-count"></span><small id="n-miss"></small><small id="n-saved"></small></div><button class="btn primary" id="n-go">${esc(T('new.finish'))}</button></div>
       <p class="discard"><button type="button" class="link" id="n-discard">${esc(T('new.discard'))}</button></p>`;
@@ -450,12 +451,10 @@ VIEWS.new = async (_, tok) => {
   const critical = () => listFor().some(c => slot(c.key).sev === 'critical') || dr.others.some(o => o.note.trim() && o.sev === 'critical');
   const missing = () => {
     const m = [], list = listFor();
-    if (!dr.d.tag.trim()) m.push(T('new.need_tag'));
+    if (!dr.d.brand.trim()) m.push(T('new.need_brand'));
     const un = list.filter(c => !slot(c.key).sev).length;
     if (un) m.push(T('new.need_rating', { n: un }));
     if (dr.others.some(o => o.files.length && !o.note.trim())) m.push(T('new.need_obs_note'));
-    if (!dr.verdict) m.push(T('new.need_result'));
-    if (dr.verdict === 'conditions' && !dr.conditions.trim()) m.push(T('new.need_conditions'));
     return m;
   };
   const bar = () => {
@@ -475,15 +474,12 @@ VIEWS.new = async (_, tok) => {
   };
   function drawResult() {
     if (!$('#n-result')) return;
-    const crit = critical();
-    if (crit) dr.verdict = 'reject';
     const expired = dr.d.cert && dr.d.cert < todayISO();
     $('#n-result').innerHTML = `
-      ${crit ? `<div class="alert bad">${esc(T('new.critical_note'))}</div>` : ''}
-      ${expired && dr.verdict !== 'reject' ? `<div class="alert warn">${esc(T('new.cert_expired'))}</div>` : ''}
-      <div class="verdicts" role="radiogroup" aria-label="${esc(T('new.result'))}">${['accept', 'conditions', 'reject'].map(v => `<label class="v-${v} ${crit && v !== 'reject' ? 'off' : ''}"><input type="radio" name="n-verdict" value="${v}" ${dr.verdict === v ? 'checked' : ''} ${crit && v !== 'reject' ? 'disabled' : ''}><span>${esc(T('verdict.' + v))}</span></label>`).join('')}</div>
-      <label class="field"><span>${esc(T('new.comment'))}</span><textarea id="n-comment" rows="3" maxlength="2000">${esc(dr.comment)}</textarea></label>
-      <label class="field" id="n-condwrap" ${dr.verdict === 'conditions' ? '' : 'hidden'}><span>${esc(T('new.conditions'))}</span><textarea id="n-conditions" rows="4" maxlength="2000" placeholder="${esc(T('new.conditions_ph'))}">${esc(dr.conditions)}</textarea></label>`;
+      ${critical() ? `<div class="alert bad">${esc(T('new.critical_note'))}</div>` : ''}
+      ${expired ? `<div class="alert warn">${esc(T('new.cert_expired'))}</div>` : ''}
+      <p class="hint">${esc(T('new.decision_note'))}</p>
+      <label class="field"><span>${esc(T('new.comment'))}</span><textarea id="n-comment" rows="3" maxlength="2000">${esc(dr.comment)}</textarea></label>`;
   }
 
   async function finish() {
@@ -501,8 +497,8 @@ VIEWS.new = async (_, tok) => {
         dr.uploaded[j.f.id] = j.path; done++; prog(); await draftPut(key, snapshot());
       });
       const paths = k => slot(k).files.map(f => dr.uploaded[f.id]);
-      const payload = { id: dr.id, type: dr.type, tag: dr.d.tag.trim(), serial: dr.d.serial.trim(), company: dr.d.company.trim(), rig: dr.d.rig.trim(), inspected_on: dr.d.date || todayISO(), cert_expiry: dr.d.cert || null,
-        inspector: dr.d.inspector.trim(), verdict: dr.verdict, comment: dr.comment.trim(), conditions: dr.verdict === 'conditions' ? dr.conditions.trim() : '',
+      const payload = { id: dr.id, type: dr.type, brand: dr.d.brand.trim(), model: dr.d.model.trim(), capacity: dr.d.capacity.trim(), location: dr.d.location.trim(), inspected_on: dr.d.date || todayISO(), cert_expiry: dr.d.cert || null,
+        inspector: dr.d.inspector.trim(), comment: dr.comment.trim(),
         items: list.map(c => { const it = slot(c.key); return { key: c.key, sev: it.sev, note: it.note.trim(), reading: (it.reading || '').trim(), files: paths(c.key) }; }),
         others: dr.others.filter(o => o.note.trim()).map(o => ({ sev: o.sev, note: o.note.trim(), files: paths('o_' + o.id) })) };
       await q(sb.rpc('save_inspection', { p_data: payload }));
@@ -516,17 +512,15 @@ VIEWS.new = async (_, tok) => {
   const form = $('#n-form');
   form.addEventListener('input', e => {
     const t = e.target;
-    if (t.id && t.id.startsWith('d-')) { dr.d[{ 'd-tag': 'tag', 'd-serial': 'serial', 'd-company': 'company', 'd-rig': 'rig', 'd-date': 'date', 'd-cert': 'cert', 'd-inspector': 'inspector' }[t.id]] = t.value; if (t.id === 'd-cert') drawResult(); bar(); saveSoon(); }
+    if (t.id && t.id.startsWith('d-')) { dr.d[{ 'd-brand': 'brand', 'd-model': 'model', 'd-capacity': 'capacity', 'd-location': 'location', 'd-date': 'date', 'd-cert': 'cert', 'd-inspector': 'inspector' }[t.id]] = t.value; if (t.id === 'd-cert') drawResult(); bar(); saveSoon(); }
     else if (t.dataset.note) { slot(t.dataset.note).note = t.value; bar(); saveSoon(); }
     else if (t.dataset.reading) { slot(t.dataset.reading).reading = t.value; saveSoon(); }
     else if (t.id === 'n-comment') { dr.comment = t.value; saveSoon(); }
-    else if (t.id === 'n-conditions') { dr.conditions = t.value; bar(); saveSoon(); }
   });
   form.addEventListener('change', async e => {
     const t = e.target;
     if (t.name === 'n-type') { dr.type = t.value; drawForm(); save(); }
     else if (t.dataset.sevr) { slot(t.dataset.sevr).sev = t.value; drawResultIfNeeded(); bar(); save(); }
-    else if (t.name === 'n-verdict') { dr.verdict = t.value; $('#n-condwrap').hidden = t.value !== 'conditions'; bar(); save(); }
     else if (t.dataset.pick) {
       const k = t.dataset.pick, it = slot(k), picked = [...t.files]; t.value = '';
       for (const f of picked) {
@@ -547,7 +541,7 @@ VIEWS.new = async (_, tok) => {
     b.closest('.item').remove(); $$('#n-others .item.other h3').forEach((h, i) => { h.lastChild.textContent = T('new.obs', { n: i + 1 }); });
     drawResultIfNeeded(); bar(); save();
   });
-  function drawResultIfNeeded() { const was = dr.verdict; drawResult(); if (was !== dr.verdict) save(); }
+  function drawResultIfNeeded() { drawResult(); }
   if (dr.restored) { dr.restored = false; save(); }
 };
 
@@ -572,7 +566,7 @@ async function buildReport(ins, urls, rl, onProgress) {
   await pool(paths, 4, async p => { try { photos[p] = await reportPhoto(urls[p]); } catch (e) { /* the report notes the missing photo */ } n++; if (onProgress) onProgress(n, paths.length); });
   const doc = HSEReport.makeDoc(ins, { lang: rl, photos });
   const blob = await docx.Packer.toBlob(doc);
-  const safe = String(ins.tag).replace(/[^\w\-]+/g, '_').slice(0, 40);
+  const safe = String(machineName(ins)).replace(/[^\w\-]+/g, '_').slice(0, 40);
   const res = { blob, name: `Inspection-${safe}-${ins.inspected_on}.docx` };
   S.reports[cacheKey] = res;
   return res;
@@ -590,7 +584,7 @@ VIEWS.inspection = async (id, tok) => {
   const c = countSev(ins);
   const certDays = ins.cert_expiry ? Math.round((new Date(ins.cert_expiry + 'T00:00:00') - new Date(ins.inspected_on + 'T00:00:00')) / 86400000) : null;
   const certTxt = ins.cert_expiry ? `${fmtDate(ins.cert_expiry)}${certDays < 0 ? ` <b class="bad">${esc(T('cert.expired', { n: -certDays }))}</b>` : ` <span class="muted">${esc(T('cert.left', { n: certDays }))}</span>`}` : `<span class="muted">${esc(T('cert.none'))}</span>`;
-  const facts = [[T('new.type'), T('type.' + ins.equipment_type)], [T('new.tag'), ins.tag], [T('new.serial'), ins.serial], [T('new.company'), ins.company], [T('new.rig'), ins.rig], [T('new.date'), fmtDate(ins.inspected_on)], [T('new.inspector'), ins.inspector_name], [T('new.cert'), null]];
+  const facts = [[T('new.type'), T('type.' + ins.equipment_type)], [T('new.brand'), ins.brand], [T('new.model'), ins.model], [T('new.capacity'), ins.capacity], [T('new.location'), ins.location], [T('new.date'), fmtDate(ins.inspected_on)], [T('new.inspector'), ins.inspector_name], [T('new.cert'), null]];
   const factsHtml = facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v === null ? certTxt : esc(v || '—')}</dd></div>`).join('');
   let last = null;
   const itemsHtml = items.map((i, n) => {
@@ -601,14 +595,13 @@ VIEWS.inspection = async (id, tok) => {
       ${(i.files || []).length ? `<div class="thumbs">${media(i.files, urls)}</div>` : ''}</article>`;
   }).join('');
   const othersHtml = others.length ? `<h4 class="sechead">${esc(T('new.others'))}</h4>${others.map((o, n) => `<article class="item other"><header><h3><span class="num">+</span>${esc(T('new.obs', { n: n + 1 }))}</h3>${sevChip(o.sev)}</header><p class="pre">${esc(o.note)}</p>${(o.files || []).length ? `<div class="thumbs">${media(o.files, urls)}</div>` : ''}</article>`).join('')}` : '';
-  if (!paint(tok, `${ins.tag} — ${T('type.' + ins.equipment_type)}`, `
-    <section class="panel head s-${esc(VKEY[ins.verdict])}"><div class="headtop">${verdictPill(ins.verdict)}</div><dl class="facts">${factsHtml}</dl>
+  if (!paint(tok, `${machineName(ins)} — ${T('type.' + ins.equipment_type)}`, `
+    <section class="panel head s-${worstSev(ins)}"><dl class="facts">${factsHtml}</dl>
       <div class="sevcounts">${SEVS.map(s => `<span class="sevchip sev-${s}"><b>${c[s]}</b> ${esc(T('sev.' + s))}</span>`).join('')}</div></section>
     <section class="panel reportbox" id="rbox"><h3>${esc(T('rep.title'))}</h3>
       <p class="muted" id="rstatus">${esc(T('rep.preparing'))}</p>
       <div class="actionrow"><button class="btn primary" id="r-dl" disabled>${esc(T('rep.download'))}</button> <button class="btn" id="r-share" disabled>${esc(T('rep.share'))}</button></div></section>
     ${ins.comment ? `<section class="panel"><h3>${esc(T('new.comment'))}</h3><p class="pre">${esc(ins.comment)}</p></section>` : ''}
-    ${ins.verdict === 'conditions' && ins.conditions ? `<section class="panel"><h3>${esc(T('new.conditions'))}</h3><p class="pre">${esc(ins.conditions)}</p></section>` : ''}
     <section class="panel"><h3>${esc(T('rep.checklist'))}</h3><div class="items">${itemsHtml}${othersHtml}</div></section>
     <p class="discard"><button type="button" class="link bad" id="r-del">${esc(T('rep.delete'))}</button></p>`)) return;
   $('#actions').innerHTML = `<a class="btn" href="#/">${esc(T('rep.back'))}</a>`;
@@ -630,12 +623,12 @@ VIEWS.inspection = async (id, tok) => {
     if (!current) return;
     const file = new File([current.blob], current.name, { type: DOCX_MIME });
     try {
-      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: `${T('rep.title')} ${ins.tag}`, text: `${T('rep.title')}: ${ins.tag} — ${T('verdict.' + ins.verdict)}` });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: `${T('rep.title')} ${machineName(ins)}`, text: `${T('rep.title')}: ${machineName(ins)}` });
       else { downloadBlob(current.blob, current.name); toast(T('rep.share_fallback')); }
     } catch (e) { if (e && e.name !== 'AbortError') fail(e); }
   };
   $('#r-del').onclick = async () => {
-    if (!confirm(T('rep.delete_ask', { tag: ins.tag }))) return;
+    if (!confirm(T('rep.delete_ask', { tag: machineName(ins) }))) return;
     try {
       const all = [...items.flatMap(i => i.files || []), ...others.flatMap(o => o.files || [])];
       await q(sb.rpc('delete_inspection', { p_id: ins.id }));

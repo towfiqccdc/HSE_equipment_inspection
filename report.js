@@ -12,7 +12,8 @@
       verdict: { accept: 'ACCEPTED', conditions: 'ACCEPTED WITH CONDITIONS', reject: 'REJECTED' },
       verdict_sub: { accept: 'Cleared to work on the rig.', conditions: 'May work only after the conditions below are met.', reject: 'Not allowed to work on the rig.' },
       sev: { ok: 'OK', minor: 'Minor', major: 'Major', critical: 'Critical', na: 'N/A' },
-      d: { type: 'Equipment type', tag: 'Tag / ID', serial: 'Serial number', company: 'Contractor', rig: 'Rig / location', date: 'Inspection date', inspector: 'Inspector', cert: 'Certificate expiry' },
+      d: { type: 'Equipment type', brand: 'Brand', model: 'Model', capacity: 'Capacity', location: 'Location', date: 'Inspection date', inspector: 'Inspector', cert: 'Certificate expiry' },
+      h_decision: 'Decision', decision_sub: 'To be completed by the HSE Department and the Operations Department after they receive this report. The inspector does not decide.', opt: { accept: 'Accepted', conditions: 'Accepted with conditions', reject: 'Rejected' }, opt_sub: { accept: 'Cleared to work on the rig.', conditions: 'May work only after the conditions below are met.', reject: 'Not allowed to work on the rig.' }, conds_blank: 'Conditions (if any)', hse_dept: 'HSE Department', ops_dept: 'Operations Department', crit_note: 'This report contains critical findings.',
       cert_none: 'Not recorded', cert_expired: 'Expired {n} days ago', cert_left: '{n} days left',
       h_summary: 'Summary of findings', h_action: 'Findings that need action', h_cond: 'Conditions before use', h_comment: 'Inspector\'s comment',
       h_check: 'Inspection checklist', h_others: 'Others: additional observations', h_sign: 'Sign-off',
@@ -82,19 +83,13 @@
 
     /* ---- title block ---- */
     const typeName = R.type[ins.equipment_type] || ins.equipment_type;
+    const mname = [ins.brand, ins.model].filter(Boolean).join(' ') || ins.tag || typeName;
     const titleBlock = table([row([cell([
       para([run(R.header, { bold: true, color: 'F2A65A', size: 22 })], { spacing: { after: 40 } }),
       para([run(R.title, { bold: true, color: 'FFFFFF', size: 52 })], { spacing: { after: 60 } }),
-      para([run(`${typeName}  ·  ${ins.tag}`, { color: 'DDE3E8', size: 30 })])
+      para([run(`${typeName}  ·  ${mname}`, { color: 'DDE3E8', size: 30 })])
     ], { shading: shade(STEEL), borders: noBorders, margins: { top: 260, bottom: 260, left: 300, right: 300 } })])], [W]);
     const orangeBar = table([row([cell([para([run('', { size: 4 })])], { shading: shade(ORANGE), borders: noBorders, margins: { top: 0, bottom: 0, left: 0, right: 0 } })], { height: { value: 70, rule: HeightRule ? HeightRule.EXACT : 'exact' } })], [W]);
-
-    /* ---- verdict ---- */
-    const [vbg, vfg] = VERD[ins.verdict] || VERD.reject;
-    const verdictBlock = table([row([
-      cell([para([run(R.verdict[ins.verdict] || ins.verdict, { bold: true, color: vfg, size: 40 })]), para([run(R.verdict_sub[ins.verdict] || '', { color: vfg, size: 21 })], { spacing: { before: 40 } })],
-        { shading: shade(vbg), borders: allThin(vbg), margins: { top: 200, bottom: 200, left: 300, right: 300 }, verticalAlign: VerticalAlign.CENTER })
-    ])], [W]);
 
     /* ---- details ---- */
     let certTxt = R.cert_none, certColor = GREY;
@@ -108,9 +103,9 @@
       cell([para([run(v || '—', { bold: true, size: 21, color: color || '18222B' })])], { width: { size: 3253, type: WidthType.DXA } })
     ];
     const details = table([
-      row([...dpair(R.d.type, typeName), ...dpair(R.d.tag, ins.tag)]),
-      row([...dpair(R.d.serial, ins.serial), ...dpair(R.d.company, ins.company)]),
-      row([...dpair(R.d.rig, ins.rig), ...dpair(R.d.date, fmtDate(ins.inspected_on))]),
+      row([...dpair(R.d.type, typeName), ...dpair(R.d.brand, ins.brand)]),
+      row([...dpair(R.d.model, ins.model), ...dpair(R.d.capacity, ins.capacity)]),
+      row([...dpair(R.d.location, ins.location), ...dpair(R.d.date, fmtDate(ins.inspected_on))]),
       row([...dpair(R.d.inspector, ins.inspector_name), ...dpair(R.d.cert, certTxt, certColor)])
     ], [1700, 3253, 1700, 3253]);
 
@@ -140,8 +135,6 @@
       : para([run(R.none, { size: 21, color: '2B8A57', bold: true })]);
 
     /* ---- conditions + comment ---- */
-    const condParas = String(ins.conditions || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)
-      .map((s, i) => para([run(`${i + 1}.  `, { bold: true, size: 21 }), run(s.replace(/^\s*\d+[.)]\s*/, ''), { size: 21 })], { spacing: { after: 60 }, indent: { left: 360, hanging: 360 } }));
     const commentParas = String(ins.comment || '').split(/\r?\n/).filter(s => s.trim()).map(s => para([run(s, { size: 21 })], { spacing: { after: 80 } }));
 
     /* ---- checklist with photos ---- */
@@ -191,10 +184,9 @@
     };
 
     const body = [];
-    body.push(titleBlock, orangeBar, gap(160), verdictBlock, gap(160), details);
+    body.push(titleBlock, orangeBar, gap(160), details);
     body.push(h2(R.h_summary), summary, gap(100));
     body.push(para([run(R.h_action, { bold: true, size: 24, color: STEEL })], { spacing: { before: 120, after: 80 }, keepNext: true }), actionBlock);
-    if (ins.verdict === 'conditions' && condParas.length) body.push(h2(R.h_cond), ...condParas);
     if (commentParas.length) body.push(h2(R.h_comment), ...commentParas);
 
     // checklist, grouped by section
@@ -215,22 +207,40 @@
       oth.forEach((o, i) => body.push(...itemBlock('+', fill(R.obs, i + 1), o.sev, o.note, null, o.files)));
     }
 
-    // sign-off
+    // decision (ticked later by the departments) and sign-off
+    const box = '\u2610';
+    const hasCrit = count('critical') > 0;
+    const optRow = v => row([
+      cell([para([run(box, { size: 40 })], { alignment: AlignmentType.CENTER })], { width: { size: 900, type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER }),
+      cell([para([run(R.opt[v], { bold: true, size: 24, color: STEEL })]), para([run(R.opt_sub[v], { size: 19, color: GREY })])], { width: { size: W - 900, type: WidthType.DXA }, verticalAlign: VerticalAlign.CENTER })
+    ]);
+    const blankLine = i => para([run('', { size: 20 })], { spacing: { after: 260 }, border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: GREY, space: i + 1 } } });
     const sigCell = (title, name) => cell([
       para([run(title, { bold: true, size: 21, color: STEEL })], { spacing: { after: 360 } }),
       para([run(`${R.name}: ${name || ''}`, { size: 20 })], { spacing: { after: 300 }, border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: GREY, space: 2 } } }),
       para([run(`${R.sign}:`, { size: 20 })], { spacing: { after: 300 }, border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: GREY, space: 3 } } }),
       para([run(`${R.date}:`, { size: 20 })], { border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: GREY, space: 1 } } })
-    ], { width: { size: W / 2, type: WidthType.DXA }, margins: { top: 140, bottom: 140, left: 200, right: 200 } });
-    body.push(h2(R.h_sign), table([row([sigCell(R.by, ins.inspector_name), sigCell(R.recv, '')])], [W / 2, W / 2]));
+    ], { width: { size: Math.floor(W / 3), type: WidthType.DXA }, margins: { top: 140, bottom: 140, left: 160, right: 160 } });
+    const decision = [
+      new Paragraph({ children: [run(R.h_decision, { bold: true, size: 28, color: STEEL })], pageBreakBefore: true, spacing: { before: 0, after: 100 }, keepNext: true, border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: ORANGE, space: 3 } } }),
+      para([run(R.decision_sub, { italics: true, size: 20, color: GREY })], { spacing: { after: 100 }, keepNext: true }),
+      ...(hasCrit ? [para([run(R.crit_note, { bold: true, size: 21, color: 'C4352C' })], { spacing: { after: 100 }, keepNext: true })] : []),
+      table(['accept', 'conditions', 'reject'].map(optRow), [900, W - 900]),
+      para([run(R.conds_blank, { bold: true, size: 21, color: STEEL })], { spacing: { before: 160, after: 120 }, keepNext: true }),
+      table([1, 2, 3].map(() => row([cell([para([run('', { size: 28 })])], { borders: { top: none, left: none, right: none, bottom: thin(GREY) } })])), [W]),
+      gap(120),
+      h2(R.h_sign),
+      table([row([sigCell(R.by, ins.inspector_name), sigCell(R.hse_dept, ''), sigCell(R.ops_dept, '')])], [Math.floor(W / 3), Math.floor(W / 3), W - 2 * Math.floor(W / 3)])
+    ];
+    body.push(...decision);
 
     const rno = String(ins.id || '').slice(0, 8).toUpperCase();
     return new Document({
-      creator: 'CCDC HSE', title: `${R.title} ${ins.tag}`, description: `${typeName} ${ins.tag}`,
+      creator: 'CCDC HSE', title: `${R.title} ${mname}`, description: `${typeName} ${mname}`,
       styles: { default: { document: { run: { font: FONT, size: 21 } } } },
       sections: [{
         properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1100, right: 1000, bottom: 1000, left: 1000, header: 450, footer: 450 } } },
-        headers: { default: new Header({ children: [para([run(R.header + '   ', { bold: true, size: 18, color: STEEL2 }), run(`${typeName} ${ins.tag}`, { size: 18, color: GREY })], { border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: LINE, space: 4 } } })] }) },
+        headers: { default: new Header({ children: [para([run(R.header + '   ', { bold: true, size: 18, color: STEEL2 }), run(`${typeName} ${mname}`, { size: 18, color: GREY })], { border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: LINE, space: 4 } } })] }) },
         footers: { default: new Footer({ children: [para([run(`${R.report_no} ${rno}`, { size: 17, color: GREY }), run('\t', { size: 17 }), run(R.page + ' ', { size: 17, color: GREY }), new TextRun({ children: [PageNumber.CURRENT], size: 17, color: GREY, font: FONT }), run(' ' + R.of + ' ', { size: 17, color: GREY }), new TextRun({ children: [PageNumber.TOTAL_PAGES], size: 17, color: GREY, font: FONT }), run(R.end, { size: 17, color: GREY })], { tabStops: [{ type: TabStopType.RIGHT, position: W }], border: { top: { style: BorderStyle.SINGLE, size: 4, color: LINE, space: 4 } } })] }) },
         children: body
       }]
