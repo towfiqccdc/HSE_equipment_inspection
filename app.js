@@ -1,5 +1,5 @@
 'use strict';
-/* CCDC HSE — equipment joint inspection. Static app: Supabase handles login, data rules and photo storage. */
+/* CCDC HSE — equipment inspection. Static app: Supabase handles login, saved inspections and photo storage. */
 const sb = supabase.createClient(CFG.url, CFG.key);
 const BUCKET = 'inspection-photos';
 const $ = (s, r = document) => r.querySelector(s);
@@ -8,7 +8,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const uid8 = () => Math.random().toString(36).slice(2, 10);
 
-const S = { session: null, uid: null, profile: null, tok: 0, rows: null, filter: 'all', search: '', checklist: null, draft: null, condFilter: null, reportInternal: false, badge: 0 };
+const S = { session: null, uid: null, profile: null, tok: 0, filter: 'all', search: '', checklist: null, draft: null, reports: {} };
 let lang = 'en';
 try { lang = localStorage.getItem('lang') || ((navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en'); } catch (e) { /* storage blocked */ }
 
@@ -27,9 +27,8 @@ const fmtDate = d => {
 const fmtDT = d => new Date(d).toLocaleString(locale(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 const q = async p => { const { data, error } = await p; if (error) throw error; return data; };
 const role = () => S.profile && S.profile.role;
-const isStaff = () => ['hse', 'operations', 'admin'].includes(role());
-const todayISO = () => new Date().toISOString().slice(0, 10);
-const daysSince = d => Math.max(0, Math.floor((Date.now() - new Date(d).getTime()) / 86400000));
+const canWork = () => ['hse', 'admin'].includes(role());
+const todayISO = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Dhaka' }).format(new Date());
 
 function toast(msg, err) {
   const el = document.createElement('div');
@@ -41,14 +40,10 @@ function toast(msg, err) {
 const fail = e => toast((e && e.message) || T('common.error'), 1);
 
 /* ---------- small UI pieces ---------- */
-const stagePill = k => `<span class="stag s-${esc(k)}">${esc(T('stage.' + k))}</span>`;
-function certChip(days, date) {
-  if (days == null) return `<span class="muted">${esc(T('cert.none'))}</span>`;
-  const c = days < 0 ? 'bad' : days <= 30 ? 'warn' : 'ok';
-  const note = days < 0 ? T('cert.expired', { n: -days }) : days <= 30 ? T('cert.days', { n: days }) : '';
-  return `<span class="cert ${c}">${fmtDate(date)}${note ? ` <b>${esc(note)}</b>` : ''}</span>`;
-}
+const VKEY = { accept: 'cleared', conditions: 'conditional', reject: 'out_of_service' };
+const verdictPill = v => `<span class="stag s-${esc(VKEY[v] || 'none')}">${esc(T('verdict.' + v))}</span>`;
 const isVideo = p => /\.(mp4|mov|webm)$/i.test(p);
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3) | 8).toString(16); }));
 function media(paths, urls) {
   return (paths || []).map(p => {
     const u = urls[p];
@@ -73,11 +68,13 @@ function paint(tok, title, html) {
   $('#body').innerHTML = html;
   return true;
 }
-const stageOf = (ins, conds) => {
-  if (ins.status !== 'decided') return ins.status;
-  if (ins.decision === 'conditional' && conds.length && conds.every(c => c.status === 'closed')) return 'cleared';
-  return ins.decision;
+const countSev = ins => {
+  const c = { ok: 0, minor: 0, major: 0, critical: 0, na: 0 };
+  (ins.items || []).forEach(i => { if (c[i.sev] != null) c[i.sev]++; });
+  (ins.others || []).forEach(o => { if (c[o.sev] != null) c[o.sev]++; });
+  return c;
 };
+const sevChip = s => `<span class="sevchip sev-${esc(s)}">${esc(T('sev.' + s))}</span>`;
 
 /* ---------- auth screens ---------- */
 function brandMark() {
@@ -96,11 +93,11 @@ function bindLang() {
 }
 function renderAuth(mode = 'signin', note = '') {
   document.documentElement.lang = lang;
-  const testUsers = (window.CFG && CFG.TEST_MODE && CFG.TEST_USERS) || [];
-  const testPanel = testUsers.length ? `<div class="testbox"><h3>${esc(T('test.title'))}</h3><p>${esc(T('test.sub'))}</p><div class="testbtns">${testUsers.map((u, i) => `<button type="button" class="btn" data-test="${i}"><b>${esc(T('role.' + u.role))}</b>${u.company ? `<small>${esc(u.company)}</small>` : ''}</button>`).join('')}</div></div>` : '';
+  const tu = testUsers();
+  const testPanel = tu.length ? `<div class="testbox"><h3>${esc(T('test.title'))}</h3><p>${esc(T('test.sub'))}</p><div class="testbtns">${tu.map((u, i) => `<button type="button" class="btn" data-test="${i}"><b>${esc(T('role.' + u.role))}</b>${u.company ? `<small>${esc(u.company)}</small>` : ''}</button>`).join('')}</div></div>` : '';
   $('#root').innerHTML = `<div class="authwrap">
     <section class="authart" aria-hidden="true">
-      <div class="hangs"><span class="stag s-cleared">${esc(T('stage.cleared'))}</span><span class="stag s-conditional">${esc(T('stage.conditional'))}</span><span class="stag s-out_of_service">${esc(T('stage.out_of_service'))}</span></div>
+      <div class="hangs"><span class="stag s-cleared">${esc(T('verdict.accept'))}</span><span class="stag s-conditional">${esc(T('verdict.conditions'))}</span><span class="stag s-out_of_service">${esc(T('verdict.reject'))}</span></div>
       <h2>${esc(T('app.tagline'))}</h2>
     </section>
     <section class="authcard">
@@ -112,8 +109,6 @@ function renderAuth(mode = 'signin', note = '') {
         ${mode === 'signup' ? `<label class="field"><span>${esc(T('auth.name'))}</span><input id="a-name" autocomplete="name" required></label>` : ''}
         <label class="field"><span>${esc(T('auth.email'))}</span><input id="a-email" type="email" autocomplete="email" required></label>
         <label class="field"><span>${esc(T('auth.password'))}</span><input id="a-pass" type="password" autocomplete="${mode === 'signup' ? 'new-password' : 'current-password'}" required></label>
-        ${mode === 'signup' ? `<label class="field"><span>${esc(T('auth.role'))}</span><select id="a-role"><option value="contractor">${esc(T('role.contractor'))}</option><option value="hse">${esc(T('role.hse'))}</option><option value="operations">${esc(T('role.operations'))}</option></select></label>
-        <label class="field" id="a-cowrap"><span>${esc(T('auth.company'))}</span><input id="a-company" autocomplete="organization"></label>` : ''}
         <div id="a-err" class="alert bad" hidden></div>
         <button class="btn primary wide" id="a-go" type="submit">${esc(T(mode === 'signup' ? 'auth.signup' : 'auth.signin'))}</button>
         ${mode === 'signin' ? `<button class="link" type="button" id="a-forgot">${esc(T('auth.forgot'))}</button>` : ''}
@@ -123,15 +118,11 @@ function renderAuth(mode = 'signin', note = '') {
   $$('[data-mode]').forEach(b => b.onclick = () => renderAuth(b.dataset.mode));
   const showErr = m => { const e = $('#a-err'); e.textContent = m; e.hidden = !m; };
   $$('[data-test]').forEach(b => b.onclick = async () => {
-    const u = testUsers[Number(b.dataset.test)];
+    const u = tu[Number(b.dataset.test)];
     $$('[data-test]').forEach(x => { x.disabled = true; });
     const { error } = await sb.auth.signInWithPassword({ email: u.email, password: u.password });
     if (error) { showErr(error.message); $$('[data-test]').forEach(x => { x.disabled = false; }); }
   });
-  if (mode === 'signup') {
-    const sync = () => { $('#a-cowrap').hidden = $('#a-role').value !== 'contractor'; };
-    $('#a-role').onchange = sync; sync();
-  }
   $('#authform').onsubmit = async ev => {
     ev.preventDefault(); showErr('');
     const email = $('#a-email').value.trim(), password = $('#a-pass').value;
@@ -141,10 +132,9 @@ function renderAuth(mode = 'signin', note = '') {
         const { error } = await sb.auth.signInWithPassword({ email, password });
         if (error) throw error;
       } else {
-        const full_name = $('#a-name').value.trim(), requested_role = $('#a-role').value, company = $('#a-company').value.trim();
+        const full_name = $('#a-name').value.trim();
         if (password.length < 8) throw new Error(T('auth.min_password'));
-        if (requested_role === 'contractor' && !company) throw new Error(T('auth.need_company'));
-        const { data, error } = await sb.auth.signUp({ email, password, options: { data: { full_name, requested_role, company }, emailRedirectTo: location.origin + location.pathname } });
+        const { data, error } = await sb.auth.signUp({ email, password, options: { data: { full_name, requested_role: 'hse' }, emailRedirectTo: location.origin + location.pathname } });
         if (error) throw error;
         if (!data.session) renderAuth('signin', T('auth.check_email'));
       }
@@ -185,63 +175,45 @@ function renderPending() {
 }
 
 /* ---------- shell and routing ---------- */
-const NAV = [
-  { id: 'dashboard', roles: ['contractor', 'hse', 'operations', 'admin'] },
-  { id: 'submit', roles: ['contractor'] },
-  { id: 'queue', roles: ['hse', 'operations', 'admin'] },
-  { id: 'conditions', roles: ['contractor', 'hse', 'operations', 'admin'] },
-  { id: 'register', roles: ['contractor', 'hse', 'operations', 'admin'] },
-  { id: 'alerts', roles: ['contractor', 'hse', 'operations', 'admin'] },
-  { id: 'scorecard', roles: ['hse', 'operations', 'admin'] },
-  { id: 'team', roles: ['admin'] }
-];
-function testSwitch() {
-  const us = testUsers(); if (!us.length) return '';
-  const cur = S.session && S.session.user ? S.session.user.email : '';
-  return `<div class="testsw"><small>${esc(T('test.as'))}</small><div>${us.map((u, i) =>
-    `<button type="button" data-testsw="${i}" class="${u.email === cur ? 'on' : ''}">${esc(T('role.' + u.role))}${u.company ? ' ' + esc(u.company.split(' ')[0] === 'Second' ? '2' : '') : ''}</button>`).join('')}</div></div>`;
+const NAV = { inspector: [{ id: 'list', href: '#/' }, { id: 'new', href: '#/new' }], admin: [{ id: 'admin', href: '#/admin' }] };
+const testUsers = () => (window.CFG && CFG.TEST_MODE && CFG.TEST_USERS) || [];
+const mode = () => (/^#\/admin/.test(location.hash) && role() === 'admin' ? 'admin' : 'inspector');
+function drawNav() {
+  const m = mode();
+  $('#nav').innerHTML = NAV[m].map(n => `<a href="${n.href}" data-nav="${n.id}"><span>${esc(T('nav.' + n.id))}</span></a>`).join('');
+  $$('[data-mode]').forEach(a => a.classList.toggle('on', a.dataset.mode === m));
 }
 function renderShell() {
   document.documentElement.lang = lang;
   const p = S.profile;
-  const inTest = testUsers().length > 0;
-  const nav = NAV.filter(n => n.roles.includes(p.role)).map(n =>
-    `<a href="#/${n.id}" data-nav="${n.id}"><span>${esc(T('nav.' + n.id))}</span>${n.id === 'alerts' ? '<i class="count" id="alertcount" hidden></i>' : ''}</a>`).join('');
+  const out = testUsers().length ? '' : `<button class="btn ghost sm" data-signout>${esc(T('auth.signout'))}</button>`;
+  const sw = role() === 'admin' ? `<div class="modesw" role="tablist" aria-label="${esc(T('mode.label'))}"><a href="#/" data-mode="inspector">${esc(T('mode.inspector'))}</a><a href="#/admin" data-mode="admin">${esc(T('mode.admin'))}</a></div>` : '';
   $('#root').innerHTML = `<div class="shell">
-    <header class="topbar">${brandMark()}<div class="row">${langSwitch()}${inTest ? '' : `<button class="btn ghost sm" data-signout>${esc(T('auth.signout'))}</button>`}</div></header>
-    ${inTest ? `<div class="testbar">${testSwitch()}</div>` : ''}
+    <header class="topbar">${brandMark()}<div class="row">${langSwitch()}${out}</div></header>
+    ${sw ? `<div class="modebar">${sw}</div>` : ''}
     <aside class="side">
       <div class="sidebrand">${brandMark()}<p>${esc(T('app.sub'))}</p></div>
-      <nav class="nav" id="nav">${nav}</nav>
+      ${sw}
+      <nav class="nav" id="nav"></nav>
       <div class="sidefoot">
-        <div class="me"><b>${esc(p.full_name || p.email)}</b><span>${esc(T('role.' + p.role))}${p.company ? ' · ' + esc(p.company) : ''}</span></div>
-        ${langSwitch()}
-        ${inTest ? testSwitch() : `<button class="btn ghost sm" data-signout>${esc(T('auth.signout'))}</button>`}
+        <div class="me"><b>${esc(p.full_name || p.email)}</b><span>${esc(T('role.' + p.role))}</span></div>
+        ${langSwitch()}${out}
       </div>
     </aside>
     <main class="main"><header class="pagehead"><h1 id="title"></h1><div id="actions"></div></header><div id="body"></div></main>
   </div>`;
   bindLang();
   $$('[data-signout]').forEach(b => b.onclick = () => sb.auth.signOut());
-  $$('[data-testsw]').forEach(b => b.onclick = async () => {
-    $$('[data-testsw]').forEach(x => { x.disabled = true; });
-    const r = await testSignIn(Number(b.dataset.testsw));
-    if (r !== true) { toast(String(r), 'bad'); $$('[data-testsw]').forEach(x => { x.disabled = false; }); }
-    else location.hash = '#/dashboard';
-  });
-}
-function canView(name) {
-  const n = NAV.find(x => x.id === name);
-  return n ? n.roles.includes(role()) : ['inspection', 'report'].includes(name);
 }
 const VIEWS = {};
 async function route() {
-  if (!S.profile || !S.profile.role) return;
+  if (!S.profile || !canWork()) return;
   let [name, arg] = location.hash.replace(/^#\/?/, '').split('/');
-  name = name || 'dashboard';
-  if (!VIEWS[name] || !canView(name)) name = 'dashboard';
+  name = name || 'list';
+  if (!VIEWS[name] || (name === 'admin' && role() !== 'admin')) name = 'list';
   const tok = ++S.tok;
-  $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.nav === (name === 'inspection' ? 'dashboard' : name)));
+  drawNav();
+  $$('#nav a').forEach(a => a.classList.toggle('on', a.dataset.nav === (name === 'inspection' ? 'list' : name)));
   $('#actions').innerHTML = '';
   $('#title').textContent = '';
   $('#body').innerHTML = `<p class="muted">${esc(T('common.loading'))}</p>`;
@@ -251,80 +223,7 @@ async function route() {
 }
 window.addEventListener('hashchange', route);
 
-function computeAlerts(rows) {
-  const out = [], r = role();
-  rows.forEach(e => {
-    if (e.cert_days != null && e.cert_days < 0) out.push({ sev: 0, e, text: T('alerts.expired'), href: '#/register' });
-    else if (e.cert_days != null && e.cert_days <= 30) out.push({ sev: 2, e, text: T('alerts.expiring', { n: e.cert_days }), href: '#/register' });
-    if (e.overdue_conditions > 0) out.push({ sev: 1, e, text: T('alerts.overdue', { n: e.overdue_conditions }), href: '#/conditions' });
-    if (e.stage === 'info_requested') out.push({ sev: 1, e, text: r === 'contractor' ? T('alerts.info_me') : T('alerts.info'), href: r === 'contractor' ? '#/submit/' + e.id : '#/inspection/' + e.inspection_id });
-    if (e.proofs_waiting > 0 && (r === 'hse' || r === 'admin')) out.push({ sev: 1, e, text: T('alerts.proofs', { n: e.proofs_waiting }), href: '#/conditions' });
-    if ((r === 'hse' && e.stage === 'awaiting_hse') || (r === 'operations' && e.stage === 'awaiting_ops')) out.push({ sev: 3, e, text: T('alerts.review_me'), href: '#/inspection/' + e.inspection_id });
-  });
-  return out.sort((a, b) => a.sev - b.sev);
-}
-function setBadge(rows) {
-  const n = computeAlerts(rows).length;
-  S.badge = n;
-  const el = $('#alertcount');
-  if (el) { el.textContent = n; el.hidden = !n; }
-}
-async function refreshBadge() {
-  try { setBadge(await q(sb.from('equipment_overview').select('*'))); } catch (e) { /* badge is optional */ }
-}
-
-/* ---------- dashboard: the tag board ---------- */
-function tagCard(r) {
-  const href = r.inspection_id ? `#/inspection/${r.inspection_id}` : (role() === 'contractor' ? `#/submit/${r.id}` : '');
-  const bits = [];
-  if (r.open_conditions > 0) bits.push(`<span>${esc(T('card.conditions_open', { n: r.open_conditions }))}</span>`);
-  if (r.overdue_conditions > 0) bits.push(`<span class="bad">${esc(T('card.conditions_overdue', { n: r.overdue_conditions }))}</span>`);
-  if (r.proofs_waiting > 0 && isStaff()) bits.push(`<span class="warn">${esc(T('card.proofs', { n: r.proofs_waiting }))}</span>`);
-  let when = '';
-  if (r.submitted_at) {
-    const waiting = ['awaiting_hse', 'awaiting_ops'].includes(r.stage);
-    const d = daysSince(r.submitted_at);
-    when = waiting ? (d === 0 ? T('card.waiting_today') : T('card.waiting', { n: d })) : T('card.sent', { d: fmtDate(r.submitted_at) });
-  } else if (role() === 'contractor') when = T('card.send_photos');
-  const tag = href ? 'a' : 'div';
-  return `<${tag} class="tagcard s-${esc(r.stage)}" ${href ? `href="${href}"` : ''}>
-    <div class="tcstrip"><span class="hole"></span><span>${esc(T('stage.' + r.stage))}</span></div>
-    <div class="tcbody">
-      <div class="tcnum"><b>${esc(r.tag)}</b>${r.version ? `<small>${esc(T('card.version', { n: r.version }))}</small>` : ''}</div>
-      <div class="tcsub">${esc(T('type.' + r.type))}${r.company ? ' — ' + esc(r.company) : ''}</div>
-      <div class="tcsub muted">${esc(r.serial || '')}${r.rig ? ' / ' + esc(r.rig) : ''}</div>
-      <div class="tcline"><span class="muted">${esc(T('card.cert'))}</span>${certChip(r.cert_days, r.cert_expiry)}</div>
-      ${bits.length ? `<div class="tcflags">${bits.join('')}</div>` : ''}
-      ${when ? `<div class="tcwhen">${esc(when)}</div>` : ''}
-    </div></${tag}>`;
-}
-const FILTERS = ['all', 'awaiting_hse', 'awaiting_ops', 'info_requested', 'cleared', 'conditional', 'out_of_service', 'none', 'cert'];
-const matchFilter = (r, f) => f === 'all' || (f === 'cert' ? r.cert_days != null && r.cert_days <= 30 : r.stage === f);
-VIEWS.dashboard = async (_, tok) => {
-  const rows = await q(sb.from('equipment_overview').select('*').order('tag'));
-  S.rows = rows; setBadge(rows);
-  if (!paint(tok, T('nav.dashboard'), `<div class="toolbar"><input id="search" type="search" placeholder="${esc(T('dash.search'))}" value="${esc(S.search)}"><div id="chips" class="chips"></div></div><div id="board" class="board"></div>`)) return;
-  const draw = () => {
-    const term = S.search.trim().toLowerCase();
-    const inSearch = r => !term || [r.tag, r.serial, r.company, r.rig].some(x => String(x || '').toLowerCase().includes(term));
-    const base = rows.filter(inSearch);
-    $('#chips').innerHTML = FILTERS.map(f => {
-      const n = base.filter(r => matchFilter(r, f)).length;
-      if (!n && f !== 'all' && S.filter !== f) return '';
-      const label = f === 'all' ? T('dash.all') : f === 'cert' ? T('dash.cert') : T('stage.' + f);
-      return `<button class="chip ${S.filter === f ? 'on' : ''} ${f === 'cert' ? 's-cert' : 's-' + f}" data-f="${f}"><i></i>${esc(label)} <b>${n}</b></button>`;
-    }).join('');
-    $$('#chips .chip').forEach(b => b.onclick = () => { S.filter = b.dataset.f; draw(); });
-    const shown = base.filter(r => matchFilter(r, S.filter));
-    if (shown.length) $('#board').innerHTML = shown.map(tagCard).join('');
-    else if (!rows.length) $('#board').innerHTML = `<div class="empty"><p>${esc(role() === 'contractor' ? T('dash.none_yet') : T('dash.staff_empty'))}</p>${role() === 'contractor' ? `<a class="btn primary" href="#/register">${esc(T('dash.add_first'))}</a>` : ''}</div>`;
-    else $('#board').innerHTML = `<div class="empty"><p>${esc(T('dash.empty'))}</p></div>`;
-  };
-  $('#search').oninput = e => { S.search = e.target.value; draw(); };
-  draw();
-};
-
-/* ---------- send photos (contractor) ---------- */
+/* ---------- photos, uploads and drafts ---------- */
 async function loadChecklist() {
   if (!S.checklist) S.checklist = await q(sb.from('checklist_items').select('*').eq('active', true).order('sort'));
   return S.checklist;
@@ -354,7 +253,7 @@ async function pool(items, n, fn) {
   }));
   if (errs.length) throw errs[0];
 }
-const extFor = (f, kind) => kind === 'photo' ? 'jpg' : ({ 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' }[f.type] || 'mp4');
+const extFor = f => f.kind === 'photo' ? 'jpg' : ({ 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' }[f.type] || 'mp4');
 // Photos are shrunk once, when added, so a draft saved on the phone stays small.
 async function readyFile(file, kind) {
   if (kind === 'photo') return { blob: await shrink(file), type: 'image/jpeg' };
@@ -364,7 +263,6 @@ const prepareUpload = async f => ({ blob: f.blob, type: f.type });
 const withUrl = f => ({ ...f, url: URL.createObjectURL(f.blob) });
 const plain = f => ({ id: f.id, kind: f.kind, type: f.type, blob: f.blob });
 
-/* ---------- drafts saved on this device, so closing the app loses nothing ---------- */
 let _db = null;
 function idb() {
   if (!_db) {
@@ -393,493 +291,456 @@ let _warnedSave = false;
 function saveWarn() { if (!_warnedSave) { _warnedSave = true; toast(T('draft.cannot_save'), 1); } }
 const later = (fn, ms = 500) => { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; };
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+const draftKey = () => 'insp:' + S.uid;
 
-VIEWS.submit = async (arg, tok) => {
-  const [rows, cl] = await Promise.all([q(sb.from('equipment_overview').select('*').order('tag')), loadChecklist()]);
-  setBadge(rows);
-  if (!rows.length) { paint(tok, T('nav.submit'), `<div class="empty"><p>${esc(T('submit.no_equipment'))}</p><a class="btn primary" href="#/register">${esc(T('nav.register'))}</a></div>`); return; }
-  const busy = r => ['awaiting_hse', 'awaiting_ops'].includes(r.stage);
-  const free = rows.filter(r => !busy(r));
-  let sel = rows.find(r => r.id === arg && !busy(r)) || (S.draft && free.find(r => r.id === S.draft.eq.id)) || free[0];
-  if (!paint(tok, T('nav.submit'), `<p class="lead">${esc(T('submit.intro'))}</p>
-    <label class="field narrow"><span>${esc(T('submit.pick'))}</span><select id="n-eq">${rows.map(r => `<option value="${esc(r.id)}" ${busy(r) ? 'disabled' : ''} ${sel && r.id === sel.id ? 'selected' : ''}>${esc(r.tag)} — ${esc(T('type.' + r.type))}${busy(r) ? ' (' + esc(T('submit.under_review')) + ')' : ''}</option>`).join('')}</select></label>
-    <div id="n-form"></div>`)) return;
-  if (!sel) { $('#n-form').innerHTML = `<div class="empty"><p>${esc(T('submit.none_free'))}</p></div>`; return; }
+/* ---------- inspections list ---------- */
+function inspCard(r) {
+  const c = countSev(r), issues = c.minor + c.major + c.critical;
+  return `<a class="tagcard s-${esc(VKEY[r.verdict])}" href="#/inspection/${esc(r.id)}">
+    <div class="tcstrip"><span class="hole"></span><span>${esc(T('verdict.' + r.verdict))}</span></div>
+    <div class="tcbody">
+      <div class="tcnum"><b>${esc(r.tag)}</b></div>
+      <div class="tcsub">${esc(T('type.' + r.equipment_type))}${r.company ? ' — ' + esc(r.company) : ''}</div>
+      <div class="tcsub muted">${esc(r.serial || '')}${r.rig ? (r.serial ? ' / ' : '') + esc(r.rig) : ''}</div>
+      <div class="tcline"><span class="muted">${esc(T('card.date'))}</span><span>${esc(fmtDate(r.inspected_on))}</span></div>
+      <div class="tcflags">${c.critical ? `<span class="bad">${esc(T('card.critical', { n: c.critical }))}</span>` : ''}${c.major ? `<span class="warn">${esc(T('card.major', { n: c.major }))}</span>` : ''}${c.minor ? `<span>${esc(T('card.minor', { n: c.minor }))}</span>` : ''}${issues ? '' : `<span class="okline">${esc(T('card.no_issues'))}</span>`}</div>
+    </div></a>`;
+}
+const VCHIPS = ['all', 'accept', 'conditions', 'reject'];
+VIEWS.list = async (_, tok) => {
+  const [rows, draft] = await Promise.all([
+    q(sb.from('inspections').select('id,tag,equipment_type,company,rig,serial,inspected_on,verdict,items,others,created_at').order('inspected_on', { ascending: false }).order('created_at', { ascending: false })),
+    draftGet(draftKey())
+  ]);
+  const dhtml = draft ? `<div class="alert warn draftcard"><div><b>${esc(T('list.draft'))}</b><p>${esc((draft.d && draft.d.tag) || T('list.draft_untitled'))}</p></div><a class="btn primary" href="#/new">${esc(T('list.resume'))}</a></div>` : '';
+  if (!paint(tok, T('nav.list'), `${dhtml}<div class="toolbar"><input id="search" type="search" placeholder="${esc(T('list.search'))}" value="${esc(S.search)}"><div id="chips" class="chips"></div></div><div id="board" class="board"></div>`)) return;
+  const draw = () => {
+    const term = S.search.trim().toLowerCase();
+    const base = rows.filter(r => !term || [r.tag, r.serial, r.company, r.rig].some(x => String(x || '').toLowerCase().includes(term)));
+    $('#chips').innerHTML = VCHIPS.map(f => {
+      const n = base.filter(r => f === 'all' || r.verdict === f).length;
+      return `<button class="chip ${S.filter === f ? 'on' : ''} s-${f === 'all' ? 'all' : VKEY[f]}" data-f="${f}"><i></i>${esc(f === 'all' ? T('list.all') : T('verdict.' + f))} <b>${n}</b></button>`;
+    }).join('');
+    $$('#chips .chip').forEach(b => b.onclick = () => { S.filter = b.dataset.f; draw(); });
+    const shown = base.filter(r => S.filter === 'all' || r.verdict === S.filter);
+    $('#board').innerHTML = shown.length ? shown.map(inspCard).join('')
+      : `<div class="empty"><p>${esc(rows.length ? T('list.no_match') : T('list.empty'))}</p>${rows.length ? '' : `<a class="btn primary" href="#/new">${esc(T('nav.new'))}</a>`}</div>`;
+  };
+  $('#search').oninput = e => { S.search = e.target.value; draw(); };
+  draw();
+  $('#actions').innerHTML = `<a class="btn primary" href="#/new">+ ${esc(T('nav.new'))}</a>`;
+};
 
-  async function drawForm(eq) {
-    const dkey = `insp:${S.uid}:${eq.id}`;
-    if (!S.draft || S.draft.eq.id !== eq.id) {
-      const saved = await draftGet(dkey);
-      S.draft = { eq, id: (saved && saved.draftId) || uid8() + uid8(), items: {}, uploaded: (saved && saved.uploaded) || {}, restored: 0 };
-      if (saved) Object.entries(saved.items || {}).forEach(([k, it]) => {
-        S.draft.items[k] = { note: it.note || '', reading: it.reading || '', files: (it.files || []).map(withUrl) };
-        S.draft.restored += S.draft.items[k].files.length;
-      });
-    }
-    const list = cl.filter(c => c.equipment_type === eq.type);
-    let banner = S.draft.restored ? `<div class="alert ok">${esc(T('draft.restored', { n: S.draft.restored }))}</div>` : '';
-    if (eq.stage === 'info_requested' && eq.inspection_id) {
-      try {
-        const prev = await q(sb.from('inspections').select('contractor_message').eq('id', eq.inspection_id).single());
-        banner += `<div class="alert warn"><b>${esc(T('submit.resubmit'))}</b><p class="pre">${esc(prev.contractor_message || '')}</p><p>${esc(T('submit.resubmit_help', { n: (eq.version || 0) + 1 }))}</p></div>`;
-      } catch (e) { /* message is optional */ }
-    }
+/* ---------- new inspection ---------- */
+const SEVS = ['ok', 'minor', 'major', 'critical', 'na'];
+function newDraft() {
+  return { id: uuid(), type: 'crane', d: { tag: '', serial: '', company: '', rig: '', date: todayISO(), cert: '', inspector: (S.profile && S.profile.full_name) || '' }, items: {}, others: [], verdict: '', comment: '', conditions: '', uploaded: {} };
+}
+async function loadDraft() {
+  if (S.draft && S.draft.uid === S.uid) return S.draft;
+  const saved = await draftGet(draftKey());
+  const dr = newDraft();
+  if (saved) {
+    dr.id = saved.draftId || dr.id; dr.type = saved.type || 'crane'; dr.d = { ...dr.d, ...(saved.d || {}) };
+    dr.verdict = saved.verdict || ''; dr.comment = saved.comment || ''; dr.conditions = saved.conditions || ''; dr.uploaded = saved.uploaded || {};
+    Object.entries(saved.items || {}).forEach(([k, it]) => { dr.items[k] = { sev: it.sev || '', note: it.note || '', reading: it.reading || '', files: (it.files || []).map(withUrl) }; });
+    dr.others = (saved.others || []).map(o => ({ id: o.id, sev: o.sev || 'minor', note: o.note || '', files: (o.files || []).map(withUrl) }));
+    dr.restored = true;
+  }
+  dr.uid = S.uid; S.draft = dr;
+  return dr;
+}
+VIEWS.new = async (_, tok) => {
+  const cl = await loadChecklist();
+  const dr = await loadDraft();
+  const key = draftKey();
+  const listFor = () => cl.filter(c => c.equipment_type === dr.type);
+  const slot = k => k.startsWith('o_') ? dr.others.find(o => 'o_' + o.id === k) : (dr.items[k] ||= { sev: '', note: '', reading: '', files: [] });
+  const snapshot = () => ({ draftId: dr.id, type: dr.type, d: dr.d, verdict: dr.verdict, comment: dr.comment, conditions: dr.conditions, uploaded: dr.uploaded,
+    items: Object.fromEntries(Object.entries(dr.items).map(([k, it]) => [k, { sev: it.sev, note: it.note, reading: it.reading, files: it.files.map(plain) }])),
+    others: dr.others.map(o => ({ id: o.id, sev: o.sev, note: o.note, files: o.files.map(plain) })) });
+  const save = async () => {
+    if (S.draft !== dr) return;
+    const ok = await draftPut(key, snapshot());
+    const el = $('#n-saved'); if (el) el.textContent = ok ? T('draft.saved') : '';
+    if (!ok) saveWarn();
+  };
+  const saveSoon = later(save);
+
+  const sevPick = (k, cur, only) => `<div class="sevpick" data-sevbox="${esc(k)}">${(only || SEVS).map(s => `<label class="sev-${s}"><input type="radio" name="sev-${esc(k)}" value="${s}" data-sevr="${esc(k)}" ${cur === s ? 'checked' : ''}><span>${esc(T('sev.' + s))}</span></label>`).join('')}</div>`;
+  const pickBtn = k => `<label class="btn pick"><input type="file" hidden data-pick="${esc(k)}" accept="image/*,video/*" multiple>+ ${esc(T('new.add_media'))}</label>`;
+  const itemHtml = (c, n) => {
+    const it = slot(c.key), hint = lbl(c, 'hint'), rl = lbl(c, 'reading_label');
+    return `<section class="item" data-key="${esc(c.key)}">
+      <header><h3><span class="num">${n}</span>${esc(lbl(c, 'label'))}</h3></header>
+      ${hint ? `<p class="hint">${esc(hint)}</p>` : ''}
+      ${sevPick(c.key, it.sev)}
+      <div class="thumbs" data-th="${esc(c.key)}"></div>
+      ${pickBtn(c.key)}
+      <input class="note" data-note="${esc(c.key)}" maxlength="500" placeholder="${esc(T('new.note'))}" value="${esc(it.note)}">
+      ${rl ? `<label class="reading"><span>${esc(rl)}</span><input data-reading="${esc(c.key)}" maxlength="20" inputmode="decimal" value="${esc(it.reading)}"> ${esc(c.reading_unit || '')}</label>` : ''}
+    </section>`;
+  };
+  const otherHtml = (o, i) => `<section class="item other" data-key="o_${esc(o.id)}">
+      <header><h3><span class="num">+</span>${esc(T('new.obs', { n: i + 1 }))}</h3><button type="button" class="btn ghost sm" data-rmother="${esc(o.id)}">${esc(T('common.remove'))}</button></header>
+      ${sevPick('o_' + o.id, o.sev, ['minor', 'major', 'critical'])}
+      <textarea class="note" rows="2" data-note="o_${esc(o.id)}" maxlength="500" placeholder="${esc(T('new.obs_ph'))}">${esc(o.note)}</textarea>
+      <div class="thumbs" data-th="o_${esc(o.id)}"></div>
+      ${pickBtn('o_' + o.id)}
+    </section>`;
+
+  function drawForm() {
+    const list = listFor();
     const secs = [];
     list.forEach((c, i) => { const nm = lbl(c, 'section'); let g = secs[secs.length - 1]; if (!g || g.name !== nm) { g = { name: nm, items: [] }; secs.push(g); } g.items.push({ c, n: i + 1 }); });
-    const itemHtml = (c, n) => {
-      const hint = lbl(c, 'hint'), rl = lbl(c, 'reading_label');
-      return `<section class="item" data-key="${esc(c.key)}">
-        <header><h3><span class="num">${n}</span>${esc(lbl(c, 'label'))}</h3><span class="kind ${c.kind}">${esc(T(c.kind === 'video' ? 'submit.video' : 'submit.photo'))}</span></header>
-        ${hint ? `<p class="hint">${esc(hint)}</p>` : ''}${c.kind === 'video' ? `<p class="hint">${esc(T('submit.hint_video'))}</p>` : ''}
-        <div class="thumbs" data-th="${esc(c.key)}"></div>
-        <label class="btn pick"><input type="file" hidden data-pick="${esc(c.key)}" accept="${c.kind === 'video' ? 'video/*' : 'image/*'}" multiple>${esc(T(c.kind === 'video' ? 'submit.add_video' : 'submit.add_photo'))}</label>
-        <input class="note" data-note="${esc(c.key)}" maxlength="500" placeholder="${esc(T('submit.note'))}">
-        ${rl ? `<label class="reading"><span>${esc(rl)}</span><input data-reading="${esc(c.key)}" maxlength="20" inputmode="decimal"> ${esc(c.reading_unit || '')}</label>` : ''}
-      </section>`;
-    };
-    const otherHtml = (k, idx) => `<section class="item other" data-key="${esc(k)}">
-        <header><h3><span class="num">+</span>${esc(T('submit.other_n', { n: idx + 1 }))}</h3><button type="button" class="btn ghost sm" data-rmother="${esc(k)}">${esc(T('submit.remove'))}</button></header>
-        <textarea class="note" rows="2" data-note="${esc(k)}" maxlength="500" placeholder="${esc(T('submit.other_ph'))}"></textarea>
-        <div class="thumbs" data-th="${esc(k)}"></div>
-        <label class="btn pick"><input type="file" hidden data-pick="${esc(k)}" accept="image/*,video/*" multiple>${esc(T('submit.add_media'))}</label>
-      </section>`;
-    $('#n-form').innerHTML = `${banner}
-      <nav class="secnav" aria-label="${esc(T('submit.sections'))}">${secs.map((g, i) => `<button type="button" data-jump="${i}">${esc(g.name)} <b data-secprog="${i}"></b></button>`).join('')}<button type="button" data-jump="others">${esc(T('submit.others'))}</button></nav>
-      ${secs.map((g, i) => `<h2 class="sechead" id="sec-${i}">${esc(g.name)}</h2>${g.items.map(x => itemHtml(x.c, x.n)).join('')}`).join('')}
-      <h2 class="sechead" id="sec-others">${esc(T('submit.others'))}</h2>
-      <p class="hint">${esc(T('submit.others_help'))}</p>
-      <div id="n-others"></div>
-      <button type="button" class="btn addother" id="n-addother">+ ${esc(T('submit.add_other'))}</button>
-      <div class="submitbar"><div><span id="n-count"></span><small id="n-warn" class="warn" hidden>${esc(T('submit.other_incomplete'))}</small><small id="n-saved"></small></div><button class="btn primary" id="n-go">${esc(T('submit.send'))}</button></div>`;
-
-    const required = list.filter(c => c.required);
-    const itemOf = k => (S.draft.items[k] ||= { files: [], note: '', reading: '' });
-    const otherKeys = () => Object.keys(S.draft.items).filter(k => /^other_\d+$/.test(k)).sort((x, y) => Number(x.slice(6)) - Number(y.slice(6)));
-    const ready = () => required.filter(c => itemOf(c.key).files.length > 0).length;
-    const badOthers = () => otherKeys().some(k => { const d = itemOf(k); return d.files.length > 0 && !d.note.trim(); });
-    const bar = () => {
-      $('#n-count').textContent = T('submit.ready', { a: ready(), b: required.length });
-      secs.forEach((g, i) => {
-        const n = g.items.filter(x => itemOf(x.c.key).files.length > 0).length, el = $(`[data-secprog="${i}"]`);
-        if (el) { el.textContent = `${n}/${g.items.length}`; el.parentElement.classList.toggle('done', n === g.items.length); }
-      });
-      const bad = badOthers(); $('#n-warn').hidden = !bad;
-      $('#n-go').disabled = ready() < required.length || bad;
-    };
-    const snapshot = () => ({ eqId: eq.id, draftId: S.draft.id, uploaded: S.draft.uploaded, items: Object.fromEntries(Object.entries(S.draft.items).map(([k, it]) => [k, { note: it.note, reading: it.reading, files: it.files.map(plain) }])) });
-    const save = async () => {
-      if (!S.draft || S.draft.eq.id !== eq.id) return;   // sent or switched machine: nothing to save
-      const ok = await draftPut(dkey, snapshot());
-      const el = $('#n-saved'); if (el) el.textContent = ok ? T('draft.saved') : '';
-      if (!ok) saveWarn();
-    };
-    const saveSoon = later(save);
-    const thumbs = key => {
-      const box = $(`[data-th="${key}"]`); const d = itemOf(key);
-      box.innerHTML = d.files.map(f => `<div class="th">${f.kind === 'video' ? `<video src="${esc(f.url)}" muted playsinline preload="metadata"></video>` : `<img src="${esc(f.url)}" alt="">`}<button type="button" data-rm="${esc(f.id)}" aria-label="${esc(T('submit.remove'))}">×</button></div>`).join('');
-      $$('[data-rm]', box).forEach(b => b.onclick = () => { const i = d.files.findIndex(x => x.id === b.dataset.rm); if (i >= 0) { URL.revokeObjectURL(d.files[i].url); d.files.splice(i, 1); } thumbs(key); bar(); save(); });
-    };
-    const bindItem = c => {
-      const d = itemOf(c.key);
-      thumbs(c.key);
-      const note = $(`[data-note="${c.key}"]`); note.value = d.note; note.oninput = () => { d.note = note.value; saveSoon(); bar(); };
-      const rd = $(`[data-reading="${c.key}"]`); if (rd) { rd.value = d.reading; rd.oninput = () => { d.reading = rd.value; saveSoon(); }; }
-      $(`[data-pick="${c.key}"]`).onchange = async e => {
-        const picked = [...e.target.files]; e.target.value = '';
-        for (const f of picked) {
-          const kind = c.kind === 'any' ? (f.type.startsWith('video/') ? 'video' : f.type.startsWith('image/') ? 'photo' : null) : c.kind;
-          if (!kind) { toast(T('err.not_image'), 1); continue; }
-          if (kind === 'photo' && !f.type.startsWith('image/')) { toast(T('err.not_image'), 1); continue; }
-          if (kind === 'video' && !f.type.startsWith('video/')) { toast(T('err.not_video'), 1); continue; }
-          if (kind === 'video' && f.size > 40 * 1024 * 1024) { toast(T('err.video_big'), 1); continue; }
-          if (d.files.length >= 8) { toast(T('err.too_many'), 1); break; }
-          try { const r = await readyFile(f, kind); d.files.push(withUrl({ id: uid8(), kind, type: r.type, blob: r.blob })); }
-          catch (er) { toast(T('err.photo_read'), 1); }
-        }
-        thumbs(c.key); bar(); save();
-      };
-    };
-    const drawOthers = () => {
-      const ks = otherKeys();
-      $('#n-others').innerHTML = ks.map(otherHtml).join('');
-      ks.forEach(k => bindItem({ key: k, kind: 'any' }));
-      $$('[data-rmother]').forEach(b => b.onclick = () => {
-        const k = b.dataset.rmother; (itemOf(k).files || []).forEach(f => URL.revokeObjectURL(f.url));
-        delete S.draft.items[k]; drawOthers(); bar(); save();
-      });
-      $('#n-addother').hidden = ks.length >= 10;
-    };
-    $('#n-addother').onclick = () => {
-      const ks = otherKeys(); const n = ks.length ? Number(ks[ks.length - 1].slice(6)) + 1 : 1;
-      itemOf('other_' + n); drawOthers(); bar(); save();
-      const el = $(`[data-note="other_${n}"]`); if (el) el.focus();
-    };
+    const f = (id, label, val, extra = '') => `<label class="field"><span>${esc(label)}</span><input id="${id}" value="${esc(val)}" maxlength="120" ${extra}></label>`;
+    $('#n-form').innerHTML = `
+      ${dr.restored ? `<div class="alert ok">${esc(T('draft.restored'))}</div>` : ''}
+      <section class="panel"><h3>${esc(T('new.details'))}</h3>
+        <div class="seg" role="radiogroup" aria-label="${esc(T('new.type'))}">${['crane', 'forklift'].map(t => `<label><input type="radio" name="n-type" value="${t}" ${dr.type === t ? 'checked' : ''}><span>${esc(T('type.' + t))}</span></label>`).join('')}</div>
+        <div class="fgrid">
+          ${f('d-tag', T('new.tag'), dr.d.tag, 'required')}${f('d-serial', T('new.serial'), dr.d.serial)}
+          ${f('d-company', T('new.company'), dr.d.company)}${f('d-rig', T('new.rig'), dr.d.rig)}
+          <label class="field"><span>${esc(T('new.date'))}</span><input id="d-date" type="date" value="${esc(dr.d.date)}"></label>
+          <label class="field"><span>${esc(T('new.cert'))}</span><input id="d-cert" type="date" value="${esc(dr.d.cert)}"></label>
+          ${f('d-inspector', T('new.inspector'), dr.d.inspector)}
+        </div>
+      </section>
+      <nav class="secnav" aria-label="${esc(T('new.sections'))}">${secs.map((g, i) => `<button type="button" data-jump="${i}">${esc(g.name)} <b data-secprog="${i}"></b></button>`).join('')}<button type="button" data-jump="others">${esc(T('new.others'))}</button><button type="button" data-jump="result">${esc(T('new.result'))}</button></nav>
+      ${secs.map((g, i) => `<h2 class="sechead" id="sec-${i}"><span>${esc(g.name)}</span><button type="button" class="btn sm" data-allok="${i}">${esc(T('new.all_ok'))}</button></h2>${g.items.map(x => itemHtml(x.c, x.n)).join('')}`).join('')}
+      <h2 class="sechead" id="sec-others"><span>${esc(T('new.others'))}</span></h2>
+      <p class="hint">${esc(T('new.others_help'))}</p>
+      <div id="n-others">${dr.others.map(otherHtml).join('')}</div>
+      <button type="button" class="btn addother" id="n-addother">+ ${esc(T('new.add_obs'))}</button>
+      <h2 class="sechead" id="sec-result"><span>${esc(T('new.result'))}</span></h2>
+      <section class="panel" id="n-result"></section>
+      <div class="submitbar"><div><span id="n-count"></span><small id="n-miss"></small><small id="n-saved"></small></div><button class="btn primary" id="n-go">${esc(T('new.finish'))}</button></div>
+      <p class="discard"><button type="button" class="link" id="n-discard">${esc(T('new.discard'))}</button></p>`;
+    list.forEach(c => thumbs(c.key));
+    dr.others.forEach(o => thumbs('o_' + o.id));
+    drawResult(); bar();
     $$('[data-jump]').forEach(b => b.onclick = () => {
-      const el = document.getElementById(b.dataset.jump === 'others' ? 'sec-others' : 'sec-' + b.dataset.jump);
+      const el = document.getElementById(b.dataset.jump === 'others' ? 'sec-others' : b.dataset.jump === 'result' ? 'sec-result' : 'sec-' + b.dataset.jump);
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
-    list.forEach(bindItem);
-    drawOthers();
-    bar();
-    if (S.draft.restored) save();
-    $('#n-go').onclick = async () => {
-      const btn = $('#n-go'); btn.disabled = true;
-      const jobs = [];
-      const all = [...list, ...otherKeys().map(k => ({ key: k, kind: 'any' }))];
-      all.forEach(c => itemOf(c.key).files.forEach(f => jobs.push({ c, f, path: `${eq.id}/${S.draft.id}/${c.key}-${f.id}.${extFor(f, f.kind)}` })));
-      let done = jobs.filter(j => S.draft.uploaded[j.f.id]).length;
-      const prog = () => { btn.textContent = T('submit.uploading', { a: done, b: jobs.length }); };
-      prog();
-      try {
-        await pool(jobs.filter(j => !S.draft.uploaded[j.f.id]), 3, async j => {
-          const { blob, type } = await prepareUpload(j.f); await uploadFile(j.path, blob, type);
-          S.draft.uploaded[j.f.id] = j.path; done++; prog(); await draftPut(dkey, snapshot());
-        });
-        const items = all.map(c => {
-          const d = itemOf(c.key);
-          return { key: c.key, files: jobs.filter(j => j.c.key === c.key).map(j => j.path), note: d.note.trim(), reading: (d.reading || '').trim() };
-        }).filter(i => i.files.length || i.note);
-        const id = await q(sb.rpc('submit_inspection', { p_equipment_id: eq.id, p_items: items }));
-        await draftDel(dkey); S.draft = null; toast(T('submit.sent'));
-        location.hash = '#/inspection/' + id;
-      } catch (e) { fail(e); btn.disabled = false; btn.textContent = T('submit.send'); }
+    $$('[data-allok]').forEach(b => b.onclick = () => {
+      secs[Number(b.dataset.allok)].items.forEach(x => { const it = slot(x.c.key); if (!it.sev) { it.sev = 'ok'; const r = $(`input[name="sev-${x.c.key}"][value="ok"]`); if (r) r.checked = true; } });
+      bar(); drawResult(); save();
+    });
+    $('#n-addother').onclick = () => {
+      const o = { id: uuid().slice(0, 8), sev: 'minor', note: '', files: [] };
+      dr.others.push(o);
+      $('#n-others').insertAdjacentHTML('beforeend', otherHtml(o, dr.others.length - 1));
+      thumbs('o_' + o.id); bar(); save();
+      const el = $(`[data-note="o_${o.id}"]`); if (el) el.focus();
     };
+    $('#n-discard').onclick = async () => {
+      if (!confirm(T('new.discard_ask'))) return;
+      await draftDel(key); S.draft = null; location.hash = '#/'; route();
+    };
+    $('#n-go').onclick = finish;
   }
-  $('#n-eq').onchange = e => { const r = rows.find(x => x.id === e.target.value); if (r) drawForm(r); };
-  await drawForm(sel);
-};
 
-/* ---------- review queue ---------- */
-VIEWS.queue = async (_, tok) => {
-  const rows = await q(sb.from('equipment_overview').select('*'));
-  setBadge(rows);
-  const r = role();
-  const byAge = (a, b) => new Date(a.submitted_at) - new Date(b.submitted_at);
-  const mineStage = r === 'operations' ? 'awaiting_ops' : 'awaiting_hse';
-  const mine = rows.filter(x => (r === 'admin' ? ['awaiting_hse', 'awaiting_ops'].includes(x.stage) : x.stage === mineStage)).sort(byAge);
-  const others = r === 'admin' ? [] : rows.filter(x => ['awaiting_hse', 'awaiting_ops'].includes(x.stage) && x.stage !== mineStage).sort(byAge);
-  const proofs = r === 'hse' || r === 'admin' ? rows.filter(x => x.proofs_waiting > 0) : [];
-  const sec = (title, list) => list.length ? `<h2 class="sect">${esc(title)}</h2><div class="board">${list.map(tagCard).join('')}</div>` : '';
-  paint(tok, T('nav.queue'), (mine.length || others.length || proofs.length)
-    ? sec(T('queue.mine'), mine) + sec(T('queue.proofs'), proofs) + sec(T('queue.others'), others)
-    : `<div class="empty"><p>${esc(T('queue.empty'))}</p></div>`);
-};
+  const thumbs = k => {
+    const box = $(`[data-th="${k}"]`); if (!box) return;
+    const it = slot(k); if (!it) return;
+    box.innerHTML = it.files.map(f => `<div class="th">${f.kind === 'video' ? `<video src="${esc(f.url)}" muted playsinline preload="metadata"></video>` : `<img src="${esc(f.url)}" alt="">`}<button type="button" data-rm="${esc(f.id)}" aria-label="${esc(T('common.remove'))}">×</button></div>`).join('');
+    $$('[data-rm]', box).forEach(b => b.onclick = () => { const i = it.files.findIndex(x => x.id === b.dataset.rm); if (i >= 0) { URL.revokeObjectURL(it.files[i].url); it.files.splice(i, 1); } thumbs(k); bar(); save(); });
+  };
+  const critical = () => listFor().some(c => slot(c.key).sev === 'critical') || dr.others.some(o => o.note.trim() && o.sev === 'critical');
+  const missing = () => {
+    const m = [], list = listFor();
+    if (!dr.d.tag.trim()) m.push(T('new.need_tag'));
+    const un = list.filter(c => !slot(c.key).sev).length;
+    if (un) m.push(T('new.need_rating', { n: un }));
+    if (dr.others.some(o => o.files.length && !o.note.trim())) m.push(T('new.need_obs_note'));
+    if (!dr.verdict) m.push(T('new.need_result'));
+    if (dr.verdict === 'conditions' && !dr.conditions.trim()) m.push(T('new.need_conditions'));
+    return m;
+  };
+  const bar = () => {
+    const list = listFor(); if (!$('#n-count')) return;
+    const rated = list.filter(c => slot(c.key).sev).length;
+    $('#n-count').textContent = T('new.rated', { a: rated, b: list.length });
+    $$('[data-secprog]').forEach(el => {
+      const i = Number(el.dataset.secprog);
+      const items = []; let idx = -1, last = null;
+      list.forEach(c => { const nm = lbl(c, 'section'); if (nm !== last) { idx++; last = nm; } if (idx === i) items.push(c); });
+      const n = items.filter(c => slot(c.key).sev).length;
+      el.textContent = `${n}/${items.length}`; el.parentElement.classList.toggle('done', n === items.length);
+    });
+    const m = missing();
+    $('#n-miss').textContent = m[0] || ''; $('#n-miss').hidden = !m.length;
+    $('#n-go').disabled = m.length > 0;
+  };
+  function drawResult() {
+    if (!$('#n-result')) return;
+    const crit = critical();
+    if (crit) dr.verdict = 'reject';
+    const expired = dr.d.cert && dr.d.cert < todayISO();
+    $('#n-result').innerHTML = `
+      ${crit ? `<div class="alert bad">${esc(T('new.critical_note'))}</div>` : ''}
+      ${expired && dr.verdict !== 'reject' ? `<div class="alert warn">${esc(T('new.cert_expired'))}</div>` : ''}
+      <div class="verdicts" role="radiogroup" aria-label="${esc(T('new.result'))}">${['accept', 'conditions', 'reject'].map(v => `<label class="v-${v} ${crit && v !== 'reject' ? 'off' : ''}"><input type="radio" name="n-verdict" value="${v}" ${dr.verdict === v ? 'checked' : ''} ${crit && v !== 'reject' ? 'disabled' : ''}><span>${esc(T('verdict.' + v))}</span></label>`).join('')}</div>
+      <label class="field"><span>${esc(T('new.comment'))}</span><textarea id="n-comment" rows="3" maxlength="2000">${esc(dr.comment)}</textarea></label>
+      <label class="field" id="n-condwrap" ${dr.verdict === 'conditions' ? '' : 'hidden'}><span>${esc(T('new.conditions'))}</span><textarea id="n-conditions" rows="4" maxlength="2000" placeholder="${esc(T('new.conditions_ph'))}">${esc(dr.conditions)}</textarea></label>`;
+  }
 
-/* ---------- inspection detail ---------- */
-function condCard(c, urls, withEquip) {
-  const overdue = c.status === 'open' && c.due_date < todayISO();
-  const eq = withEquip && c.equipment ? `<a class="condeq" href="#/inspection/${esc(c.inspection_id)}">${esc(c.equipment.tag)}${c.equipment.company ? ' — ' + esc(c.equipment.company) : ''}</a>` : '';
-  const r = role();
-  let proof = '';
-  if (c.status !== 'open' && (c.proof_files || []).length) {
-    proof = `<div class="proof"><h4>${esc(T('cond.proof_title'))}</h4><div class="thumbs">${media(c.proof_files, urls)}</div>${c.proof_note ? `<p class="pre">${esc(c.proof_note)}</p>` : ''}<p class="muted small">${esc(T('cond.proof_by', { n: c.proof_by_name || '', d: fmtDT(c.proof_at) }))}</p></div>`;
+  async function finish() {
+    const btn = $('#n-go'); btn.disabled = true;
+    const list = listFor();
+    const keep = [...list.map(c => ({ k: c.key })), ...dr.others.filter(o => o.note.trim()).map(o => ({ k: 'o_' + o.id }))];
+    const jobs = [];
+    keep.forEach(({ k }) => slot(k).files.forEach(f => jobs.push({ f, path: `${dr.id}/${k}-${f.id}.${extFor(f)}` })));
+    let done = jobs.filter(j => dr.uploaded[j.f.id]).length;
+    const prog = () => { btn.textContent = T('new.uploading', { a: done, b: jobs.length }); };
+    prog();
+    try {
+      await pool(jobs.filter(j => !dr.uploaded[j.f.id]), 3, async j => {
+        const { blob, type } = await prepareUpload(j.f); await uploadFile(j.path, blob, type);
+        dr.uploaded[j.f.id] = j.path; done++; prog(); await draftPut(key, snapshot());
+      });
+      const paths = k => slot(k).files.map(f => dr.uploaded[f.id]);
+      const payload = { id: dr.id, type: dr.type, tag: dr.d.tag.trim(), serial: dr.d.serial.trim(), company: dr.d.company.trim(), rig: dr.d.rig.trim(), inspected_on: dr.d.date || todayISO(), cert_expiry: dr.d.cert || null,
+        inspector: dr.d.inspector.trim(), verdict: dr.verdict, comment: dr.comment.trim(), conditions: dr.verdict === 'conditions' ? dr.conditions.trim() : '',
+        items: list.map(c => { const it = slot(c.key); return { key: c.key, sev: it.sev, note: it.note.trim(), reading: (it.reading || '').trim(), files: paths(c.key) }; }),
+        others: dr.others.filter(o => o.note.trim()).map(o => ({ sev: o.sev, note: o.note.trim(), files: paths('o_' + o.id) })) };
+      await q(sb.rpc('save_inspection', { p_data: payload }));
+      await draftDel(key); S.draft = null; toast(T('new.saved'));
+      location.hash = '#/inspection/' + dr.id;
+    } catch (e) { fail(e); btn.textContent = T('new.finish'); bar(); }
   }
-  let act = '';
-  if (r === 'contractor' && c.status === 'open') {
-    act = `<div class="condact"><label class="btn pick"><input type="file" hidden multiple accept="image/*,video/*" data-proofpick>${esc(T('cond.add_files'))}</label><div class="thumbs" data-proofthumbs></div>
-      <input class="note" data-proofnote maxlength="500" placeholder="${esc(T('cond.note_ph'))}"><button class="btn primary" data-act="proof">${esc(T('cond.send_proof'))}</button></div>`;
-  }
-  if (r === 'hse' && c.status === 'proof_submitted') {
-    act = `<div class="condact"><input class="note" data-backnote maxlength="500" placeholder="${esc(T('cond.back_note_ph'))}"><div class="row"><button class="btn primary" data-act="approve">${esc(T('cond.approve'))}</button><button class="btn" data-act="back">${esc(T('cond.send_back'))}</button></div></div>`;
-  }
-  return `<article class="cond c-${esc(c.status)}" data-cond="${esc(c.id)}" data-eq="${esc(c.equipment_id)}">
-    <header><span class="cpill c-${esc(c.status)}">${esc(T('cond.status.' + c.status))}</span>${overdue ? `<span class="cpill c-overdue">${esc(T('cond.overdue'))}</span>` : ''}<span class="muted">${esc(T('cond.due', { d: fmtDate(c.due_date) }))}</span></header>
-    ${eq}<p class="ctext pre">${esc(c.text)}</p>
-    ${c.review_note && c.status === 'open' ? `<div class="alert warn small">${esc(T('cond.sent_back', { n: c.review_note }))}</div>` : ''}
-    ${proof}${c.status === 'closed' ? `<p class="muted small">${esc(T('cond.closed_by', { n: c.closed_by_name || '', d: fmtDT(c.closed_at) }))}</p>` : ''}${act}</article>`;
-}
-function bindCond(root, reload) {
-  $$('[data-cond]', root).forEach(card => {
-    const id = card.dataset.cond, eqId = card.dataset.eq;
-    const files = [];
-    const pkey = `proof:${S.uid}:${id}`;
-    const th = $('[data-proofthumbs]', card);
-    const noteEl = $('[data-proofnote]', card);
-    const pSave = async () => { if (!th) return; if (!(await draftPut(pkey, { files: files.map(plain), note: noteEl ? noteEl.value : '' }))) saveWarn(); };
-    const pSaveSoon = later(pSave);
-    const drawTh = () => { if (th) th.innerHTML = files.map(f => `<div class="th">${f.kind === 'video' ? `<video src="${esc(f.url)}" muted playsinline preload="metadata"></video>` : `<img src="${esc(f.url)}" alt="">`}<button type="button" data-rm="${esc(f.id)}">×</button></div>`).join(''); $$('[data-rm]', th).forEach(b => b.onclick = () => { const i = files.findIndex(x => x.id === b.dataset.rm); if (i >= 0) { URL.revokeObjectURL(files[i].url); files.splice(i, 1); drawTh(); pSave(); } }); };
-    if (th) draftGet(pkey).then(saved => { if (saved) { (saved.files || []).forEach(f => files.push(withUrl(f))); if (noteEl && saved.note) noteEl.value = saved.note; drawTh(); } });
-    if (noteEl) noteEl.oninput = pSaveSoon;
-    const pick = $('[data-proofpick]', card);
-    if (pick) pick.onchange = async e => {
-      const picked = [...e.target.files]; e.target.value = '';
+
+  if (!paint(tok, T('nav.new'), '<div id="n-form"></div>')) return;
+  drawForm();
+  const form = $('#n-form');
+  form.addEventListener('input', e => {
+    const t = e.target;
+    if (t.id && t.id.startsWith('d-')) { dr.d[{ 'd-tag': 'tag', 'd-serial': 'serial', 'd-company': 'company', 'd-rig': 'rig', 'd-date': 'date', 'd-cert': 'cert', 'd-inspector': 'inspector' }[t.id]] = t.value; if (t.id === 'd-cert') drawResult(); bar(); saveSoon(); }
+    else if (t.dataset.note) { slot(t.dataset.note).note = t.value; bar(); saveSoon(); }
+    else if (t.dataset.reading) { slot(t.dataset.reading).reading = t.value; saveSoon(); }
+    else if (t.id === 'n-comment') { dr.comment = t.value; saveSoon(); }
+    else if (t.id === 'n-conditions') { dr.conditions = t.value; bar(); saveSoon(); }
+  });
+  form.addEventListener('change', async e => {
+    const t = e.target;
+    if (t.name === 'n-type') { dr.type = t.value; drawForm(); save(); }
+    else if (t.dataset.sevr) { slot(t.dataset.sevr).sev = t.value; drawResultIfNeeded(); bar(); save(); }
+    else if (t.name === 'n-verdict') { dr.verdict = t.value; $('#n-condwrap').hidden = t.value !== 'conditions'; bar(); save(); }
+    else if (t.dataset.pick) {
+      const k = t.dataset.pick, it = slot(k), picked = [...t.files]; t.value = '';
       for (const f of picked) {
         const kind = f.type.startsWith('video/') ? 'video' : f.type.startsWith('image/') ? 'photo' : null;
-        if (!kind) { toast(T('err.not_image'), 1); continue; }
+        if (!kind) { toast(T('err.not_media'), 1); continue; }
         if (kind === 'video' && f.size > 40 * 1024 * 1024) { toast(T('err.video_big'), 1); continue; }
-        if (files.length >= 8) { toast(T('err.too_many'), 1); break; }
-        try { const r = await readyFile(f, kind); files.push(withUrl({ id: uid8(), kind, type: r.type, blob: r.blob })); }
+        if (it.files.length >= 8) { toast(T('err.too_many'), 1); break; }
+        try { const r = await readyFile(f, kind); it.files.push(withUrl({ id: uid8(), kind, type: r.type, blob: r.blob })); }
         catch (er) { toast(T('err.photo_read'), 1); }
       }
-      drawTh(); pSave();
-    };
-    $$('[data-act]', card).forEach(b => b.onclick = async () => {
-      b.disabled = true;
-      try {
-        if (b.dataset.act === 'proof') {
-          if (!files.length) throw new Error(T('cond.add_files'));
-          const paths = files.map(f => `${eqId}/proof-${id}/${f.id}.${extFor(f, f.kind)}`);
-          await pool(files.map((f, i) => ({ f, p: paths[i] })), 3, async j => { const { blob, type } = await prepareUpload(j.f); await uploadFile(j.p, blob, type); });
-          await q(sb.rpc('submit_condition_proof', { p_condition_id: id, p_files: paths, p_note: ($('[data-proofnote]', card).value || '').trim() }));
-          await draftDel(pkey); toast(T('cond.proof_sent'));
-        } else {
-          const approve = b.dataset.act === 'approve';
-          await q(sb.rpc('review_condition', { p_condition_id: id, p_approve: approve, p_note: ($('[data-backnote]', card).value || '').trim() || null }));
-          toast(T(approve ? 'cond.closed' : 'cond.sent_back_done'));
-        }
-        reload();
-      } catch (e) { fail(e); b.disabled = false; }
-    });
+      thumbs(k); bar(); save();
+    }
   });
+  form.addEventListener('click', e => {
+    const b = e.target.closest('[data-rmother]'); if (!b) return;
+    const o = dr.others.find(x => x.id === b.dataset.rmother); if (o) o.files.forEach(f => URL.revokeObjectURL(f.url));
+    dr.others = dr.others.filter(x => x.id !== b.dataset.rmother);
+    b.closest('.item').remove(); $$('#n-others .item.other h3').forEach((h, i) => { h.lastChild.textContent = T('new.obs', { n: i + 1 }); });
+    drawResultIfNeeded(); bar(); save();
+  });
+  function drawResultIfNeeded() { const was = dr.verdict; drawResult(); if (was !== dr.verdict) save(); }
+  if (dr.restored) { dr.restored = false; save(); }
+};
+
+/* ---------- the Word report ---------- */
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+async function reportPhoto(url) {
+  const blob = await (await fetch(url)).blob();
+  const bmp = await createImageBitmap(blob);
+  const k = Math.min(1, 1000 / Math.max(bmp.width, bmp.height));
+  const w = Math.round(bmp.width * k), h = Math.round(bmp.height * k);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  c.getContext('2d').drawImage(bmp, 0, 0, w, h);
+  if (bmp.close) bmp.close();
+  const out = await new Promise((res, rej) => c.toBlob(b => (b ? res(b) : rej(new Error('photo'))), 'image/jpeg', 0.72));
+  return { data: new Uint8Array(await out.arrayBuffer()), w, h };
+}
+async function buildReport(ins, urls, rl, onProgress) {
+  const cacheKey = ins.id + ':' + rl;
+  if (S.reports[cacheKey]) return S.reports[cacheKey];
+  const paths = [...new Set([...(ins.items || []).flatMap(i => i.files || []), ...(ins.others || []).flatMap(o => o.files || [])].filter(p => !isVideo(p) && urls[p]))];
+  const photos = {}; let n = 0;
+  await pool(paths, 4, async p => { try { photos[p] = await reportPhoto(urls[p]); } catch (e) { /* the report notes the missing photo */ } n++; if (onProgress) onProgress(n, paths.length); });
+  const doc = HSEReport.makeDoc(ins, { lang: rl, photos });
+  const blob = await docx.Packer.toBlob(doc);
+  const safe = String(ins.tag).replace(/[^\w\-]+/g, '_').slice(0, 40);
+  const res = { blob, name: `Inspection-${safe}-${ins.inspected_on}.docx` };
+  S.reports[cacheKey] = res;
+  return res;
+}
+function downloadBlob(blob, name) {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
 }
 
+/* ---------- one inspection ---------- */
 VIEWS.inspection = async (id, tok) => {
-  const ins = await q(sb.from('inspections').select('*, equipment(*)').eq('id', id).single());
-  const staff = isStaff(), r = role(), e = ins.equipment;
-  const [vers, conds, revs, audit] = await Promise.all([
-    q(sb.from('inspections').select('id,version,status,decision,created_at').eq('equipment_id', ins.equipment_id).order('version', { ascending: false })),
-    q(sb.from('inspection_conditions').select('*').eq('inspection_id', id).order('due_date')),
-    staff ? q(sb.from('reviews').select('*').eq('inspection_id', id).order('created_at')) : Promise.resolve([]),
-    staff ? q(sb.from('audit_events').select('*').eq('inspection_id', id).order('created_at')) : Promise.resolve([])
-  ]);
-  const urls = await signed(ins.items.flatMap(i => i.files || []).concat(conds.flatMap(c => c.proof_files || [])));
-  const st = stageOf(ins, conds);
-  const hse = revs.find(x => x.dept === 'HSE'), ratings = (hse && hse.item_ratings) || {};
-  const latest = vers[0] && vers[0].id === id;
-  const hseForm = r === 'hse' && ins.status === 'awaiting_hse';
-  const opsForm = r === 'operations' && ins.status === 'awaiting_ops';
-
-  let lastSec = null;
-  const itemsHtml = ins.items.map(i => {
-    const rt = ratings[i.key];
+  const ins = await q(sb.from('inspections').select('*').eq('id', id).single());
+  const items = ins.items || [], others = ins.others || [];
+  const urls = await signed([...items.flatMap(i => i.files || []), ...others.flatMap(o => o.files || [])]);
+  const c = countSev(ins);
+  const certDays = ins.cert_expiry ? Math.round((new Date(ins.cert_expiry + 'T00:00:00') - new Date(ins.inspected_on + 'T00:00:00')) / 86400000) : null;
+  const certTxt = ins.cert_expiry ? `${fmtDate(ins.cert_expiry)}${certDays < 0 ? ` <b class="bad">${esc(T('cert.expired', { n: -certDays }))}</b>` : ` <span class="muted">${esc(T('cert.left', { n: certDays }))}</span>`}` : `<span class="muted">${esc(T('cert.none'))}</span>`;
+  const facts = [[T('new.type'), T('type.' + ins.equipment_type)], [T('new.tag'), ins.tag], [T('new.serial'), ins.serial], [T('new.company'), ins.company], [T('new.rig'), ins.rig], [T('new.date'), fmtDate(ins.inspected_on)], [T('new.inspector'), ins.inspector_name], [T('new.cert'), null]];
+  const factsHtml = facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v === null ? certTxt : esc(v || '—')}</dd></div>`).join('');
+  let last = null;
+  const itemsHtml = items.map((i, n) => {
+    const sn = lbl(i, 'section'); const head = sn && sn !== last ? (last = sn, `<h4 class="sechead">${esc(sn)}</h4>`) : '';
     const rl = lbl(i, 'reading_label');
-    const sn = lbl(i, 'section'); const head = sn && sn !== lastSec ? (lastSec = sn, `<h4 class="sechead">${esc(sn)}</h4>`) : '';
-    return `${head}<article class="item" data-key="${esc(i.key)}">
-      <header><h3>${esc(lbl(i, 'label'))}</h3>${rt ? `<span class="sevchip sev-${esc(rt.sev)}">${esc(T('sev.' + rt.sev))}</span>` : ''}</header>
-      ${i.note ? `<p class="pre">${esc(i.note)}</p>` : ''}${i.reading ? `<p class="muted">${esc(rl || T('detail.reading'))}: <b>${esc(i.reading)}</b> ${esc(i.reading_unit || '')}</p>` : ''}
-      ${rt && rt.note ? `<p class="rnote">${esc(rt.note)}</p>` : ''}
-      <div class="thumbs">${media(i.files, urls)}</div>
-      ${hseForm ? `<div class="sevpick" data-sev="${esc(i.key)}">${['ok', 'minor', 'major', 'critical'].map((s, n) => `<label class="sev-${s}"><input type="radio" name="sev-${esc(i.key)}" value="${s}" ${n === 0 ? 'checked' : ''}><span>${esc(T('sev.' + s))}</span></label>`).join('')}</div>
-        <input class="note" data-sevnote="${esc(i.key)}" maxlength="500" placeholder="${esc(T('hse.note_ph'))}">` : ''}
-    </article>`;
+    return `${head}<article class="item"><header><h3><span class="num">${n + 1}</span>${esc(lbl(i, 'label'))}</h3>${sevChip(i.sev)}</header>
+      ${i.note ? `<p class="pre">${esc(i.note)}</p>` : ''}${i.reading ? `<p class="muted">${esc(rl || T('new.reading'))}: <b>${esc(i.reading)}</b> ${esc(i.reading_unit || '')}</p>` : ''}
+      ${(i.files || []).length ? `<div class="thumbs">${media(i.files, urls)}</div>` : ''}</article>`;
   }).join('');
+  const othersHtml = others.length ? `<h4 class="sechead">${esc(T('new.others'))}</h4>${others.map((o, n) => `<article class="item other"><header><h3><span class="num">+</span>${esc(T('new.obs', { n: n + 1 }))}</h3>${sevChip(o.sev)}</header><p class="pre">${esc(o.note)}</p>${(o.files || []).length ? `<div class="thumbs">${media(o.files, urls)}</div>` : ''}</article>`).join('')}` : '';
+  if (!paint(tok, `${ins.tag} — ${T('type.' + ins.equipment_type)}`, `
+    <section class="panel head s-${esc(VKEY[ins.verdict])}"><div class="headtop">${verdictPill(ins.verdict)}</div><dl class="facts">${factsHtml}</dl>
+      <div class="sevcounts">${SEVS.map(s => `<span class="sevchip sev-${s}"><b>${c[s]}</b> ${esc(T('sev.' + s))}</span>`).join('')}</div></section>
+    <section class="panel reportbox" id="rbox"><h3>${esc(T('rep.title'))}</h3>
+      <p class="muted" id="rstatus">${esc(T('rep.preparing'))}</p>
+      <div class="actionrow"><button class="btn primary" id="r-dl" disabled>${esc(T('rep.download'))}</button> <button class="btn" id="r-share" disabled>${esc(T('rep.share'))}</button></div></section>
+    ${ins.comment ? `<section class="panel"><h3>${esc(T('new.comment'))}</h3><p class="pre">${esc(ins.comment)}</p></section>` : ''}
+    ${ins.verdict === 'conditions' && ins.conditions ? `<section class="panel"><h3>${esc(T('new.conditions'))}</h3><p class="pre">${esc(ins.conditions)}</p></section>` : ''}
+    <section class="panel"><h3>${esc(T('rep.checklist'))}</h3><div class="items">${itemsHtml}${othersHtml}</div></section>
+    <p class="discard"><button type="button" class="link bad" id="r-del">${esc(T('rep.delete'))}</button></p>`)) return;
+  $('#actions').innerHTML = `<a class="btn" href="#/">${esc(T('rep.back'))}</a>`;
 
-  const xs = (hse && hse.extra_findings) || [];
-  const extraHtml = hseForm
-    ? `<h4 class="sechead">${esc(T('hse.extra_title'))}</h4><p class="hint">${esc(T('hse.extra_help'))}</p><div id="h-extras"></div><button type="button" class="btn" id="h-addx">+ ${esc(T('hse.extra_add'))}</button>`
-    : (xs.length ? `<h4 class="sechead">${esc(T('hse.extra_title'))}</h4>${xs.map(x => `<div class="item"><header><span class="sevchip sev-${esc(x.sev)}">${esc(T('sev.' + x.sev))}</span></header><p class="pre">${esc(x.note)}</p></div>`).join('')}` : '');
-  const verHtml = vers.length > 1 ? `<nav class="vers" aria-label="${esc(T('detail.versions'))}">${vers.map(v => `<a href="#/inspection/${esc(v.id)}" class="${v.id === id ? 'on' : ''}">${esc(T('card.version', { n: v.version }))}</a>`).join('')}</nav>` : '';
-  const facts = [[T('detail.contractor'), e.company], [T('detail.serial'), e.serial], [T('detail.rig'), e.rig], [T('detail.cert'), null], [T('detail.sent_by'), ins.inspector_name], [T('detail.sent_on'), fmtDT(ins.created_at)]];
-  const certDays = e.cert_expiry ? Math.round((new Date(e.cert_expiry + 'T00:00:00') - new Date(todayISO() + 'T00:00:00')) / 86400000) : null;
-  const factsHtml = facts.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${v === null ? certChip(certDays, e.cert_expiry) : esc(v || '—')}</dd></div>`).join('');
-
-  let status = '';
-  if (ins.status === 'awaiting_hse' && r !== 'hse') status = `<p class="muted">${esc(T('detail.waiting_hse'))}</p>`;
-  if (ins.status === 'awaiting_ops' && r !== 'operations') status = `<p class="muted">${esc(T('detail.waiting_ops'))}</p>`;
-  const msg = ins.contractor_message && ['info_requested', 'decided'].includes(ins.status)
-    ? `<section class="panel msg s-${esc(st)}"><h3>${esc(ins.status === 'decided' ? T('detail.decision') : T('detail.message'))}</h3>${ins.status === 'decided' ? `<p>${stagePill(st)}</p>` : ''}<p class="pre">${esc(ins.contractor_message)}</p>${ins.decided_at ? `<p class="muted small">${esc(T('detail.decided_by', { n: ins.decided_by_name || '', d: fmtDT(ins.decided_at) }))}</p>` : ''}</section>`
-    : (ins.status === 'decided' ? `<section class="panel msg s-${esc(st)}"><h3>${esc(T('detail.decision'))}</h3><p>${stagePill(st)}</p><p class="muted small">${esc(T('detail.decided_by', { n: ins.decided_by_name || '', d: fmtDT(ins.decided_at) }))}</p></section>` : '');
-  const resend = r === 'contractor' && ins.status === 'info_requested' && latest ? `<a class="btn primary" href="#/submit/${esc(ins.equipment_id)}">${esc(T('detail.send_updated'))}</a>` : '';
-
-  const hseHtml = hseForm ? `<section class="panel form" id="hse-form"><h3>${esc(T('hse.title'))}</h3><p class="muted">${esc(T('hse.help'))}</p>
-    <label class="field"><span>${esc(T('hse.verdict'))}</span><select id="h-verdict"><option value="" disabled selected>${esc(T('hse.choose'))}</option>${['accept', 'conditions', 'reject', 'more_info'].map(v => `<option value="${v}">${esc(T('hverdict.' + v))}</option>`).join('')}</select></label>
-    <label class="field"><span>${esc(T('hse.comment'))}</span><textarea id="h-comment" rows="4" maxlength="2000"></textarea></label>
-    <label class="field" id="h-msgwrap" hidden><span>${esc(T('hse.message'))}</span><textarea id="h-msg" rows="3" maxlength="2000"></textarea></label>
-    <button class="btn primary" id="h-go">${esc(T('hse.go'))}</button></section>` : '';
-  const opsHtml = opsForm ? `<section class="panel form" id="ops-form"><h3>${esc(T('ops.title'))}</h3>
-    ${hse ? `<p class="hsesaid">${esc(T('ops.hse_said'))} <b>${esc(T('hverdict.' + hse.verdict))}</b></p>` : ''}${hse && hse.verdict === 'reject' ? `<div class="alert warn">${esc(T('ops.locked'))}</div>` : ''}
-    <label class="field"><span>${esc(T('ops.verdict'))}</span><select id="o-verdict"><option value="" disabled selected>${esc(T('hse.choose'))}</option>${['accept', 'conditions', 'reject', 'more_info'].filter(v => !(hse && hse.verdict === 'reject' && v !== 'reject') && !(hse && hse.verdict === 'conditions' && v === 'accept')).map(v => `<option value="${v}">${esc(T('overdict.' + v))}</option>`).join('')}</select></label>
-    <label class="field"><span>${esc(T('ops.comment'))}</span><textarea id="o-comment" rows="3" maxlength="2000"></textarea></label>
-    <div id="o-condwrap" hidden><h4>${esc(T('ops.conditions'))}</h4><div id="o-conds"></div><button type="button" class="btn sm" id="o-addcond">${esc(T('ops.add_condition'))}</button></div>
-    <label class="field" id="o-msgwrap"><span>${esc(T('ops.message'))}</span><textarea id="o-msg" rows="3" maxlength="2000"></textarea></label>
-    <button class="btn primary" id="o-go">${esc(T('ops.go'))}</button></section>` : '';
-
-  const revHtml = staff ? `<section class="panel"><h3>${esc(T('detail.comments'))}</h3>${revs.length ? revs.map(x => `<div class="rev d-${esc(x.dept)}"><div class="revhead"><b>${esc(T(x.dept === 'HSE' ? 'role.hse' : 'role.operations'))}</b><span>${esc(x.reviewer_name)}</span><em>${esc(T((x.dept === 'HSE' ? 'hverdict.' : 'overdict.') + x.verdict))}</em><small>${esc(fmtDT(x.created_at))}</small></div><p class="pre">${esc(x.comment)}</p></div>`).join('') : `<p class="muted">${esc(T('detail.no_comments'))}</p>`}</section>` : '';
-  const condHtml = conds.length ? `<section class="panel"><h3>${esc(T('detail.conditions'))}</h3><div class="conds">${conds.map(c => condCard(c, urls, false)).join('')}</div></section>` : '';
-  const auditHtml = staff && audit.length ? `<details class="panel audit"><summary>${esc(T('detail.audit'))} (${audit.length})</summary><ul>${audit.map(a => `<li><time>${esc(fmtDT(a.created_at))}</time> ${esc(a.actor_name || '')} <small>${esc(a.actor_role ? T('role.' + a.actor_role) : '')}</small> ${esc(T('audit.' + a.action))}</li>`).join('')}</ul></details>` : '';
-
-  if (!paint(tok, `${e.tag} — ${T('type.' + e.type)}`, `
-    <section class="panel head s-${esc(st)}"><div class="headtop">${stagePill(st)}<span class="muted">${esc(T('card.version', { n: ins.version }))}${latest ? '' : ' · ' + esc(T('detail.old_version'))}</span></div>
-      <dl class="facts">${factsHtml}</dl>${verHtml}${status}</section>
-    ${msg}${resend ? `<div class="actionrow">${resend}</div>` : ''}
-    <section class="panel"><h3>${esc(T('detail.items'))}</h3><div class="items">${itemsHtml}${extraHtml}</div></section>
-    ${condHtml}${revHtml}${hseHtml}${opsHtml}${auditHtml}`)) return;
-  $('#actions').innerHTML = `<a class="btn" href="#/report/${esc(id)}">${esc(T('detail.report'))}</a>`;
-  bindCond($('#body'), route);
-
-  if (hseForm) {
-    $('#h-addx').onclick = () => {
-      const d = document.createElement('div'); d.className = 'xrow';
-      d.innerHTML = `<select class="xsev" aria-label="${esc(T('hse.extra_title'))}">${['minor', 'major', 'critical'].map(v => `<option value="${v}">${esc(T('sev.' + v))}</option>`).join('')}</select><input class="xnote" maxlength="500" placeholder="${esc(T('hse.extra_ph'))}"><button type="button" class="btn ghost sm" aria-label="${esc(T('submit.remove'))}">×</button>`;
-      $('button', d).onclick = () => d.remove(); $('#h-extras').append(d); $('.xnote', d).focus();
-    };
-    $('#h-verdict').onchange = ev => { $('#h-msgwrap').hidden = ev.target.value !== 'more_info'; };
-    $('#h-go').onclick = async () => {
-      const verdict = $('#h-verdict').value;
-      if (!verdict) return toast(T('hse.choose'), 1);
-      const ratingsOut = {};
-      $$('.item[data-key]').forEach(it => {
-        const k = it.dataset.key, sel = $(`input[name="sev-${k}"]:checked`, it);
-        ratingsOut[k] = { sev: sel ? sel.value : 'ok', note: ($(`[data-sevnote="${k}"]`, it) || {}).value || '' };
-      });
-      const b = $('#h-go'); b.disabled = true;
-      try {
-        await q(sb.rpc('hse_review', { p_inspection_id: id, p_verdict: verdict, p_comment: $('#h-comment').value, p_ratings: ratingsOut, p_contractor_message: verdict === 'more_info' ? $('#h-msg').value : null, p_extra: $$('.xrow').map(r => ({ sev: $('.xsev', r).value, note: $('.xnote', r).value.trim() })).filter(x => x.note) }));
-        toast(T('hse.done')); route();
-      } catch (er) { fail(er); b.disabled = false; }
-    };
-  }
-  if (opsForm) {
-    const condRow = () => { const d = document.createElement('div'); d.className = 'condrow'; d.innerHTML = `<input class="ctxt" maxlength="500" placeholder="${esc(T('ops.cond_ph'))}"><input class="cdue" type="date" min="${todayISO()}" aria-label="${esc(T('ops.due'))}"><button type="button" class="btn ghost sm" aria-label="${esc(T('submit.remove'))}">×</button>`; $('button', d).onclick = () => d.remove(); $('#o-conds').append(d); };
-    $('#o-addcond').onclick = condRow;
-    $('#o-verdict').onchange = ev => {
-      $('#o-condwrap').hidden = ev.target.value !== 'conditions';
-      if (ev.target.value === 'conditions' && !$('#o-conds').children.length) condRow();
-    };
-    $('#o-go').onclick = async () => {
-      const verdict = $('#o-verdict').value;
-      if (!verdict) return toast(T('hse.choose'), 1);
-      const conditions = verdict === 'conditions' ? $$('.condrow').map(d => ({ text: $('.ctxt', d).value, due: $('.cdue', d).value })) : null;
-      const b = $('#o-go'); b.disabled = true;
-      try {
-        await q(sb.rpc('ops_review', { p_inspection_id: id, p_verdict: verdict, p_comment: $('#o-comment').value, p_contractor_message: $('#o-msg').value, p_conditions: conditions }));
-        toast(T('ops.done')); route();
-      } catch (er) { fail(er); b.disabled = false; }
-    };
-  }
-};
-
-/* ---------- conditions ---------- */
-VIEWS.conditions = async (_, tok) => {
-  if (!S.condFilter) S.condFilter = role() === 'hse' ? 'proof_submitted' : 'open';
-  const list =await q(sb.from('inspection_conditions').select('*, equipment(tag,type,company)').order('due_date'));
-  const urls = await signed(list.flatMap(c => c.proof_files || []));
-  const draw = () => {
-    const shown = list.filter(c => S.condFilter === 'all' || c.status === S.condFilter);
-    $('#cchips').innerHTML = ['open', 'proof_submitted', 'closed', 'all'].map(f => `<button class="chip ${S.condFilter === f ? 'on' : ''}" data-cf="${f}"><i></i>${esc(T('cond.f_' + f))} <b>${f === 'all' ? list.length : list.filter(c => c.status === f).length}</b></button>`).join('');
-    $$('[data-cf]').forEach(b => b.onclick = () => { S.condFilter = b.dataset.cf; draw(); });
-    $('#clist').innerHTML = shown.length ? shown.map(c => condCard(c, urls, true)).join('') : `<div class="empty"><p>${esc(T('cond.empty'))}</p></div>`;
-    bindCond($('#clist'), route);
-  };
-  if (!paint(tok, T('nav.conditions'), '<div class="toolbar"><div id="cchips" class="chips"></div></div><div id="clist" class="conds"></div>')) return;
-  draw();
-};
-
-/* ---------- equipment register ---------- */
-VIEWS.register = async (_, tok) => {
-  const rows = await q(sb.from('equipment_overview').select('*').order('tag'));
-  setBadge(rows);
-  const staff = isStaff();
-  if (!paint(tok, T('nav.register'), `<section class="panel form"><h3>${esc(T('reg.add'))}</h3>
-    <div class="grid2">
-      <label class="field"><span>${esc(T('reg.tag'))}</span><input id="e-tag" maxlength="40"></label>
-      <label class="field"><span>${esc(T('reg.type'))}</span><select id="e-type"><option value="forklift">${esc(T('type.forklift'))}</option><option value="crane">${esc(T('type.crane'))}</option></select></label>
-      ${staff ? `<label class="field"><span>${esc(T('reg.company'))}</span><input id="e-co" maxlength="120"></label>` : ''}
-      <label class="field"><span>${esc(T('reg.serial'))}</span><input id="e-ser" maxlength="60"></label>
-      <label class="field"><span>${esc(T('reg.rig'))}</span><input id="e-rig" maxlength="60"></label>
-      <label class="field"><span>${esc(T('reg.cert'))}</span><input id="e-exp" type="date"></label>
-    </div><button class="btn primary" id="e-add">${esc(T('reg.go'))}</button></section>
-    <h2 class="sect">${esc(T('reg.list'))}</h2>
-    <div class="tblwrap"><table class="tbl"><thead><tr><th>${esc(T('reg.tag'))}</th><th>${esc(T('reg.type'))}</th><th>${esc(T('reg.company'))}</th><th>${esc(T('reg.serial'))}</th><th>${esc(T('reg.rig'))}</th><th>${esc(T('reg.cert'))}</th></tr></thead><tbody>
-    ${rows.map(r => `<tr><td><b>${esc(r.tag)}</b></td><td>${esc(T('type.' + r.type))}</td><td>${esc(r.company || '—')}</td><td>${esc(r.serial || '—')}</td><td>${esc(r.rig || '—')}</td>
-      <td>${staff ? `<div class="inl"><input type="date" value="${esc(r.cert_expiry || '')}" data-cert="${esc(r.id)}"><button class="btn sm" data-savecert="${esc(r.id)}">${esc(T('reg.save'))}</button></div>` : certChip(r.cert_days, r.cert_expiry)}</td></tr>`).join('')}
-    </tbody></table></div>`)) return;
-  $('#e-add').onclick = async () => {
-    const b = $('#e-add'); b.disabled = true;
+  let current = null, seq = 0;
+  const status = $('#rstatus'), dl = $('#r-dl'), sh = $('#r-share');
+  const make = async () => {
+    const my = ++seq, rl = 'en';
+    dl.disabled = sh.disabled = true; current = null;
+    status.textContent = T('rep.preparing'); status.className = 'muted';
     try {
-      await q(sb.rpc('register_equipment', { p_tag: $('#e-tag').value, p_type: $('#e-type').value, p_serial: $('#e-ser').value, p_rig: $('#e-rig').value, p_cert_expiry: $('#e-exp').value || null, p_company: staff ? $('#e-co').value : null }));
-      toast(T('reg.added')); route();
-    } catch (e) { fail(e); b.disabled = false; }
+      const r = await buildReport(ins, urls, rl, (a, b) => { if (my === seq) status.textContent = T('rep.photos', { a, b }); });
+      if (my !== seq) return;
+      current = r; status.textContent = T('rep.ready', { name: r.name, kb: Math.round(r.blob.size / 1024) }); dl.disabled = sh.disabled = false;
+    } catch (e) { if (my === seq) { status.textContent = T('rep.failed') + ' ' + (e.message || ''); status.className = 'bad'; } }
   };
-  $$('[data-savecert]').forEach(b => b.onclick = async () => {
-    const id = b.dataset.savecert, v = $(`[data-cert="${id}"]`).value;
-    b.disabled = true;
-    try { await q(sb.rpc('set_cert_expiry', { p_equipment_id: id, p_expiry: v || null })); toast(T('reg.saved')); route(); } catch (e) { fail(e); b.disabled = false; }
-  });
-};
-
-/* ---------- alerts ---------- */
-VIEWS.alerts = async (_, tok) => {
-  const rows = await q(sb.from('equipment_overview').select('*'));
-  setBadge(rows);
-  const list = computeAlerts(rows);
-  paint(tok, T('nav.alerts'), list.length ? `<ul class="alerts">${list.map(a => `<li class="al sev${a.sev}"><a href="${a.href}"><b>${esc(a.e.tag)}</b><span>${esc(a.e.company || '')}</span><em>${esc(a.text)}</em></a></li>`).join('')}</ul>` : `<div class="empty"><p>${esc(T('alerts.empty'))}</p></div>`);
-};
-
-/* ---------- vendor scorecard ---------- */
-VIEWS.scorecard = async (_, tok) => {
-  const rows = await q(sb.rpc('vendor_scorecard'));
-  const n = v => (v == null ? '—' : esc(v));
-  paint(tok, T('nav.scorecard'), rows.length ? `<div class="tblwrap"><table class="tbl score"><thead><tr><th>${esc(T('score.company'))}</th><th>${esc(T('score.machines'))}</th><th>${esc(T('score.submissions'))}</th><th>${esc(T('score.accepted'))}</th><th>${esc(T('score.conditional'))}</th><th>${esc(T('score.rejected'))}</th><th>${esc(T('score.rate'))}</th><th>${esc(T('score.resub'))}</th><th>${esc(T('score.days'))}</th><th>${esc(T('score.overdue'))}</th></tr></thead><tbody>
-    ${rows.map(r => `<tr><td><b>${esc(r.company)}</b></td><td>${n(r.machines)}</td><td>${n(r.submissions)}</td><td>${n(r.accepted)}</td><td>${n(r.conditional)}</td><td>${n(r.rejected)}</td>
-      <td>${r.rejection_rate == null ? '—' : `<span class="rate"><span class="bar"><i style="width:${Math.min(100, Number(r.rejection_rate))}%"></i></span><b>${esc(r.rejection_rate)}%</b></span>`}</td><td>${n(r.resubmissions)}</td><td>${n(r.avg_days_to_decision)}</td><td class="${r.overdue_conditions > 0 ? 'bad' : ''}">${n(r.overdue_conditions)}</td></tr>`).join('')}
-    </tbody></table></div>` : `<div class="empty"><p>${esc(T('score.empty'))}</p></div>`);
-};
-
-/* ---------- team (admin) ---------- */
-VIEWS.team = async (_, tok) => {
-  const users = await q(sb.from('profiles').select('*').order('created_at', { ascending: false }));
-  const pending = users.filter(u => !u.role), active = users.filter(u => u.role);
-  const row = u => `<tr data-user="${esc(u.id)}"><td><b>${esc(u.full_name || '—')}</b><div class="muted small">${esc(u.email || '')}</div>${!u.role && u.requested_role ? `<div class="small">${esc(T('team.requested', { r: T('role.' + u.requested_role) + (u.requested_company ? ' / ' + u.requested_company : '') }))}</div>` : ''}</td>
-    <td><select data-role>${[['', 'role.none'], ['contractor', 'role.contractor'], ['hse', 'role.hse'], ['operations', 'role.operations'], ['admin', 'role.admin']].map(([v, k]) => `<option value="${v}" ${(u.role || '') === v ? 'selected' : ''}>${esc(T(k))}</option>`).join('')}</select></td>
-    <td><input data-company value="${esc(u.company || u.requested_company || '')}" placeholder="${esc(T('team.company_ph'))}" maxlength="120"></td><td><button class="btn sm primary" data-saveuser>${esc(T('team.save'))}</button></td></tr>`;
-  const table = list => `<div class="tblwrap"><table class="tbl"><tbody>${list.map(row).join('')}</tbody></table></div>`;
-  if (!paint(tok, T('nav.team'), `${pending.length ? `<h2 class="sect">${esc(T('team.pending'))} (${pending.length})</h2>${table(pending)}` : ''}<h2 class="sect">${esc(T('team.members'))}</h2>${active.length ? table(active) : `<p class="muted">${esc(T('team.empty'))}</p>`}`)) return;
-  $$('[data-saveuser]').forEach(b => b.onclick = async () => {
-    const tr = b.closest('tr'); b.disabled = true;
+  dl.onclick = () => current && downloadBlob(current.blob, current.name);
+  sh.onclick = async () => {
+    if (!current) return;
+    const file = new File([current.blob], current.name, { type: DOCX_MIME });
     try {
-      await q(sb.rpc('admin_set_profile', { p_user_id: tr.dataset.user, p_role: $('[data-role]', tr).value || null, p_company: $('[data-company]', tr).value, p_name: null }));
-      toast(T('team.saved')); route();
-    } catch (e) { fail(e); b.disabled = false; }
-  });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: `${T('rep.title')} ${ins.tag}`, text: `${T('rep.title')}: ${ins.tag} — ${T('verdict.' + ins.verdict)}` });
+      else { downloadBlob(current.blob, current.name); toast(T('rep.share_fallback')); }
+    } catch (e) { if (e && e.name !== 'AbortError') fail(e); }
+  };
+  $('#r-del').onclick = async () => {
+    if (!confirm(T('rep.delete_ask', { tag: ins.tag }))) return;
+    try {
+      const all = [...items.flatMap(i => i.files || []), ...others.flatMap(o => o.files || [])];
+      await q(sb.rpc('delete_inspection', { p_id: ins.id }));
+      if (all.length) await sb.storage.from(BUCKET).remove(all).catch(() => {});
+      toast(T('rep.deleted')); location.hash = '#/';
+    } catch (e) { fail(e); }
+  };
+  make();
 };
 
-/* ---------- printable report ---------- */
-VIEWS.report = async (id, tok) => {
-  const ins = await q(sb.from('inspections').select('*, equipment(*)').eq('id', id).single());
-  const staff = isStaff(), e = ins.equipment;
-  const [conds, revs] = await Promise.all([
-    q(sb.from('inspection_conditions').select('*').eq('inspection_id', id).order('due_date')),
-    staff ? q(sb.from('reviews').select('*').eq('inspection_id', id).order('created_at')) : Promise.resolve([])
-  ]);
-  const urls = await signed(ins.items.flatMap(i => i.files || []));
-  const st = stageOf(ins, conds);
-  const hse = revs.find(x => x.dept === 'HSE'), ratings = (hse && hse.item_ratings) || {};
-  const draw = () => {
-    const internal = staff && S.reportInternal;
-    let lastSec = null;
-    const xs = (hse && hse.extra_findings) || [];
-    const findings = ins.items.map(i => {
-      const rt = ratings[i.key];
-      const sn = lbl(i, 'section'); const head = sn && sn !== lastSec ? (lastSec = sn, `<h4 class="sechead">${esc(sn)}</h4>`) : '';
-      const photos = (i.files || []).filter(p => !isVideo(p) && urls[p]).map(p => `<img class="rimg" src="${esc(urls[p])}" alt="">`).join('');
-      const vids = (i.files || []).filter(isVideo).length;
-      return `${head}<div class="ritem"><div class="rhead"><b>${esc(lbl(i, 'label'))}</b>${internal && rt ? `<span class="sevchip sev-${esc(rt.sev)}">${esc(T('sev.' + rt.sev))}</span>` : ''}</div>
-        ${i.note ? `<p class="pre">${esc(i.note)}</p>` : ''}${i.reading ? `<p>${esc(lbl(i, 'reading_label') || T('detail.reading'))}: ${esc(i.reading)} ${esc(i.reading_unit || '')}</p>` : ''}
-        ${internal && rt && rt.note ? `<p class="rnote">${esc(rt.note)}</p>` : ''}<div class="rimgs">${photos}</div>${vids ? `<p class="muted small">${esc(T('report.video'))} (${vids})</p>` : ''}</div>`;
-    }).join('') + (internal && xs.length ? `<h4 class="sechead">${esc(T('hse.extra_title'))}</h4>${xs.map(x => `<div class="ritem"><div class="rhead"><span class="sevchip sev-${esc(x.sev)}">${esc(T('sev.' + x.sev))}</span></div><p class="pre">${esc(x.note)}</p></div>`).join('')}` : '');
-    $('#rbody').innerHTML = `<header class="rtitle"><h2>${esc(T('app.name'))} — ${esc(T('report.title'))}</h2><p class="muted">${esc(T('report.generated', { d: fmtDT(new Date()), n: S.profile.full_name || S.profile.email }))}</p></header>
-      <dl class="facts rfacts"><div><dt>${esc(T('reg.tag'))}</dt><dd><b>${esc(e.tag)}</b> — ${esc(T('type.' + e.type))}</dd></div>
-        <div><dt>${esc(T('detail.contractor'))}</dt><dd>${esc(e.company || '—')}</dd></div><div><dt>${esc(T('detail.serial'))}</dt><dd>${esc(e.serial || '—')}</dd></div>
-        <div><dt>${esc(T('detail.rig'))}</dt><dd>${esc(e.rig || '—')}</dd></div><div><dt>${esc(T('detail.cert'))}</dt><dd>${esc(fmtDate(e.cert_expiry))}</dd></div>
-        <div><dt>${esc(T('detail.versions'))}</dt><dd>${esc(T('card.version', { n: ins.version }))}</dd></div>
-        <div><dt>${esc(T('detail.sent_by'))}</dt><dd>${esc(ins.inspector_name)}</dd></div><div><dt>${esc(T('detail.sent_on'))}</dt><dd>${esc(fmtDT(ins.created_at))}</dd></div></dl>
-      <section class="rsec"><h3>${esc(T('report.decision'))}</h3><p>${stagePill(st)}</p>${ins.contractor_message ? `<p class="pre">${esc(ins.contractor_message)}</p>` : ''}${ins.decided_at ? `<p class="muted small">${esc(T('detail.decided_by', { n: ins.decided_by_name || '', d: fmtDT(ins.decided_at) }))}</p>` : ''}</section>
-      ${conds.length ? `<section class="rsec"><h3>${esc(T('detail.conditions'))}</h3><ul>${conds.map(c => `<li>${esc(c.text)} — ${esc(T('cond.due', { d: fmtDate(c.due_date) }))} (${esc(T('cond.status.' + c.status))})</li>`).join('')}</ul></section>` : ''}
-      ${internal && revs.length ? `<section class="rsec"><h3>${esc(T('report.internal_reviews'))}</h3>${revs.map(x => `<p><b>${esc(T(x.dept === 'HSE' ? 'role.hse' : 'role.operations'))}</b> — ${esc(x.reviewer_name)} — ${esc(T((x.dept === 'HSE' ? 'hverdict.' : 'overdict.') + x.verdict))}<br><span class="pre">${esc(x.comment)}</span></p>`).join('')}</section>` : ''}
-      <section class="rsec"><h3>${esc(T('report.findings'))}</h3>${findings}</section>
-      <section class="rsec sign"><div><span></span>${esc(T('report.hse_sign'))}</div><div><span></span>${esc(T('report.ops_sign'))}</div><div><span></span>${esc(T('report.date'))}</div></section>`;
+
+/* ---------- admin: edit the checklist form ---------- */
+VIEWS.admin = async (_, tok) => {
+  const rows = await q(sb.from('checklist_items').select('*').order('sort'));
+  const models = {}; let dirty = false;
+  const build = type => {
+    const secs = [];
+    rows.filter(r => r.equipment_type === type).forEach(r => {
+      let g = secs[secs.length - 1];
+      if (!g || g.en !== (r.section_en || '')) { g = { en: r.section_en || '', zh: r.section_zh || '', items: [] }; secs.push(g); }
+      g.items.push({ key: r.key, label_en: r.label_en, label_zh: r.label_zh, hint_en: r.hint_en || '', hint_zh: r.hint_zh || '', reading_label_en: r.reading_label_en || '', reading_label_zh: r.reading_label_zh || '', reading_unit: r.reading_unit || '', active: r.active });
+    });
+    return secs;
   };
-  if (!paint(tok, T('report.title'), `<div class="toolbar noprint"><a class="btn" href="#/inspection/${esc(id)}">${esc(T('report.back'))}</a>
-    ${staff ? `<label class="check"><input type="checkbox" id="r-int" ${S.reportInternal ? 'checked' : ''}> ${esc(T('report.internal'))}</label>` : ''}
-    <button class="btn primary" id="r-print">${esc(T('report.print'))}</button></div><article class="report" id="rbody"></article>`)) return;
+  let type = S.adminType || 'crane';
+  models[type] = build(type);
+  const M = () => models[type];
+  const inp = (cls, f, v, ph, extra = '') => `<input class="${cls}" data-f="${f}" value="${esc(v)}" placeholder="${esc(ph)}" maxlength="120" ${extra}>`;
+  const draw = () => {
+    const total = M().reduce((n, g) => n + g.items.length, 0);
+    let num = 0;
+    $('#a-body').innerHTML = `
+      <div class="seg" role="tablist">${['crane', 'forklift'].map(t => `<label><input type="radio" name="a-type" value="${t}" ${type === t ? 'checked' : ''}><span>${esc(T('type.' + t))}</span></label>`).join('')}</div>
+      <p class="hint">${esc(T('admin.help', { n: total }))}</p>
+      ${M().map((g, si) => `<section class="asec" data-s="${si}">
+        <header class="ahead">
+          ${inp('a-secname', 'sec_en', g.en, T('admin.sec_en'), 'aria-label="' + esc(T('admin.sec_en')) + '"')}${inp('a-secname', 'sec_zh', g.zh, T('admin.sec_zh'))}
+          <div class="amove"><button type="button" class="btn sm" data-act="sec-up" ${si === 0 ? 'disabled' : ''} aria-label="${esc(T('admin.up'))}">▲</button><button type="button" class="btn sm" data-act="sec-down" ${si === M().length - 1 ? 'disabled' : ''} aria-label="${esc(T('admin.down'))}">▼</button><button type="button" class="btn ghost sm bad" data-act="sec-del">${esc(T('common.remove'))}</button></div>
+        </header>
+        ${g.items.map((it, ii) => { num++; return `<div class="arow ${it.active ? '' : 'off'}" data-s="${si}" data-i="${ii}">
+          <span class="num">${num}</span>
+          <div class="afields">${inp('a-name', 'label_en', it.label_en, T('admin.name_en'))}${inp('a-name', 'label_zh', it.label_zh, T('admin.name_zh'))}
+            <details><summary>${esc(T('admin.more'))}</summary>
+              <div class="amore">${inp('a-hint', 'hint_en', it.hint_en, T('admin.hint_en'))}${inp('a-hint', 'hint_zh', it.hint_zh, T('admin.hint_zh'))}
+              ${inp('a-hint', 'reading_label_en', it.reading_label_en, T('admin.read_en'))}${inp('a-hint', 'reading_label_zh', it.reading_label_zh, T('admin.read_zh'))}${inp('a-unit', 'reading_unit', it.reading_unit, T('admin.unit'))}</div></details></div>
+          <div class="acon"><label class="chk"><input type="checkbox" data-f="active" ${it.active ? 'checked' : ''}><span>${esc(T('admin.show'))}</span></label>
+            <div class="amove"><button type="button" class="btn sm" data-act="up" aria-label="${esc(T('admin.up'))}">▲</button><button type="button" class="btn sm" data-act="down" aria-label="${esc(T('admin.down'))}">▼</button><button type="button" class="btn ghost sm bad" data-act="del" aria-label="${esc(T('common.remove'))}">×</button></div></div>
+        </div>`; }).join('')}
+        <button type="button" class="btn sm addrow" data-act="add" data-s="${si}">+ ${esc(T('admin.add_item'))}</button>
+      </section>`).join('')}
+      <button type="button" class="btn" id="a-addsec">+ ${esc(T('admin.add_sec'))}</button>
+      <div class="submitbar"><div><span>${esc(T('admin.note'))}</span><small id="a-state"></small></div><button class="btn primary" id="a-save">${esc(T('admin.save'))}</button></div>`;
+    $('#a-state').textContent = dirty ? T('admin.unsaved') : '';
+  };
+  if (!paint(tok, T('nav.admin'), '<div id="a-body"></div>')) return;
   draw();
-  const cb = $('#r-int'); if (cb) cb.onchange = () => { S.reportInternal = cb.checked; draw(); };
-  $('#r-print').onclick = () => window.print();
+  const body = $('#a-body');
+  const mark = () => { dirty = true; const el = $('#a-state'); if (el) el.textContent = T('admin.unsaved'); };
+  body.addEventListener('input', e => {
+    const t = e.target, f = t.dataset.f; if (!f) return;
+    const sec = t.closest('[data-s]'); if (!sec) return;
+    const g = M()[Number(sec.dataset.s)], row = t.closest('.arow');
+    if (row) { const it = g.items[Number(row.dataset.i)]; it[f] = t.type === 'checkbox' ? t.checked : t.value; if (f === 'active') row.classList.toggle('off', !t.checked); }
+    else g[f === 'sec_en' ? 'en' : 'zh'] = t.value;
+    mark();
+  });
+  body.addEventListener('change', async e => {
+    if (e.target.name === 'a-type') {
+      if (dirty && !confirm(T('admin.discard_ask'))) { draw(); return; }
+      type = e.target.value; S.adminType = type; models[type] = build(type); dirty = false; draw();
+    }
+  });
+  body.addEventListener('click', async e => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const act = b.dataset.act, sec = b.closest('[data-s]'), si = sec ? Number(sec.dataset.s) : -1, row = b.closest('.arow'), ii = row ? Number(row.dataset.i) : -1, m = M();
+    if (act === 'add') { m[si].items.push({ key: null, label_en: '', label_zh: '', hint_en: '', hint_zh: '', reading_label_en: '', reading_label_zh: '', reading_unit: '', active: true }); mark(); draw(); const els = $$(`.asec[data-s="${si}"] .arow .a-name[data-f="label_en"]`); if (els.length) els[els.length - 1].focus(); return; }
+    if (act === 'del') { m[si].items.splice(ii, 1); }
+    else if (act === 'up') { if (ii > 0) [m[si].items[ii - 1], m[si].items[ii]] = [m[si].items[ii], m[si].items[ii - 1]]; else if (si > 0) m[si - 1].items.push(m[si].items.splice(ii, 1)[0]); }
+    else if (act === 'down') { const L = m[si].items.length; if (ii < L - 1) [m[si].items[ii + 1], m[si].items[ii]] = [m[si].items[ii], m[si].items[ii + 1]]; else if (si < m.length - 1) m[si + 1].items.unshift(m[si].items.splice(ii, 1)[0]); }
+    else if (act === 'sec-up') { if (si > 0) [m[si - 1], m[si]] = [m[si], m[si - 1]]; }
+    else if (act === 'sec-down') { if (si < m.length - 1) [m[si + 1], m[si]] = [m[si], m[si + 1]]; }
+    else if (act === 'sec-del') { if (m[si].items.length && !confirm(T('admin.sec_del_ask', { n: m[si].items.length }))) return; m.splice(si, 1); }
+    mark(); draw();
+  });
+  body.addEventListener('click', e => {
+    if (e.target.id === 'a-addsec') { M().push({ en: '', zh: '', items: [{ key: null, label_en: '', label_zh: '', hint_en: '', hint_zh: '', reading_label_en: '', reading_label_zh: '', reading_unit: '', active: true }] }); mark(); draw(); const els = $$('.a-secname[data-f="sec_en"]'); if (els.length) els[els.length - 1].focus(); }
+    if (e.target.id === 'a-save') saveAll();
+  });
+  async function saveAll() {
+    const items = [];
+    M().forEach(g => g.items.forEach(it => items.push({ ...it, section_en: g.en, section_zh: g.zh })));
+    if (!items.length) return toast(T('admin.empty'), 1);
+    if (items.some(i => !i.label_en.trim())) return toast(T('admin.need_name'), 1);
+    const btn = $('#a-save'); btn.disabled = true;
+    try {
+      await q(sb.rpc('admin_save_checklist', { p_type: type, p_items: items }));
+      S.checklist = null;
+      const fresh = await q(sb.from('checklist_items').select('*').order('sort'));
+      rows.length = 0; fresh.forEach(r => rows.push(r));
+      models[type] = build(type); dirty = false; draw(); toast(T('admin.saved'));
+    } catch (e) { fail(e); btn.disabled = false; }
+  }
 };
 
 /* ---------- boot ---------- */
-function testUsers() { return (window.CFG && CFG.TEST_MODE && CFG.TEST_USERS) || []; }
 async function testSignIn(i) {
   const u = testUsers()[i]; if (!u) return false;
   const { error } = await sb.auth.signInWithPassword({ email: u.email, password: u.password });
@@ -900,9 +761,8 @@ async function start() {
   if (!S.session) { renderAuth(); return; }
   try { S.profile = await q(sb.from('profiles').select('*').eq('id', S.session.user.id).single()); }
   catch (e) { $('#root').innerHTML = `<div class="authwrap single"><section class="authcard"><div class="alert bad">${esc(e.message || e)}</div><button class="btn" onclick="location.reload()">${esc(T('common.refresh'))}</button></section></div>`; return; }
-  if (!S.profile.role) { renderPending(); return; }
+  if (!canWork()) { renderPending(); return; }
   renderShell();
-  refreshBadge();
   route();
 }
 sb.auth.onAuthStateChange((ev, session) => {
