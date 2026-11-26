@@ -195,26 +195,40 @@ const NAV = [
   { id: 'scorecard', roles: ['hse', 'operations', 'admin'] },
   { id: 'team', roles: ['admin'] }
 ];
+function testSwitch() {
+  const us = testUsers(); if (!us.length) return '';
+  const cur = S.session && S.session.user ? S.session.user.email : '';
+  return `<div class="testsw"><small>${esc(T('test.as'))}</small><div>${us.map((u, i) =>
+    `<button type="button" data-testsw="${i}" class="${u.email === cur ? 'on' : ''}">${esc(T('role.' + u.role))}${u.company ? ' ' + esc(u.company.split(' ')[0] === 'Second' ? '2' : '') : ''}</button>`).join('')}</div></div>`;
+}
 function renderShell() {
   document.documentElement.lang = lang;
   const p = S.profile;
+  const inTest = testUsers().length > 0;
   const nav = NAV.filter(n => n.roles.includes(p.role)).map(n =>
     `<a href="#/${n.id}" data-nav="${n.id}"><span>${esc(T('nav.' + n.id))}</span>${n.id === 'alerts' ? '<i class="count" id="alertcount" hidden></i>' : ''}</a>`).join('');
   $('#root').innerHTML = `<div class="shell">
-    <header class="topbar">${brandMark()}<div class="row">${langSwitch()}<button class="btn ghost sm" data-signout>${esc(T('auth.signout'))}</button></div></header>
+    <header class="topbar">${brandMark()}<div class="row">${langSwitch()}${inTest ? '' : `<button class="btn ghost sm" data-signout>${esc(T('auth.signout'))}</button>`}</div></header>
+    ${inTest ? `<div class="testbar">${testSwitch()}</div>` : ''}
     <aside class="side">
       <div class="sidebrand">${brandMark()}<p>${esc(T('app.sub'))}</p></div>
       <nav class="nav" id="nav">${nav}</nav>
       <div class="sidefoot">
         <div class="me"><b>${esc(p.full_name || p.email)}</b><span>${esc(T('role.' + p.role))}${p.company ? ' · ' + esc(p.company) : ''}</span></div>
         ${langSwitch()}
-        <button class="btn ghost sm" data-signout>${esc(T('auth.signout'))}</button>
+        ${inTest ? testSwitch() : `<button class="btn ghost sm" data-signout>${esc(T('auth.signout'))}</button>`}
       </div>
     </aside>
     <main class="main"><header class="pagehead"><h1 id="title"></h1><div id="actions"></div></header><div id="body"></div></main>
   </div>`;
   bindLang();
   $$('[data-signout]').forEach(b => b.onclick = () => sb.auth.signOut());
+  $$('[data-testsw]').forEach(b => b.onclick = async () => {
+    $$('[data-testsw]').forEach(x => { x.disabled = true; });
+    const r = await testSignIn(Number(b.dataset.testsw));
+    if (r !== true) { toast(String(r), 'bad'); $$('[data-testsw]').forEach(x => { x.disabled = false; }); }
+    else location.hash = '#/dashboard';
+  });
 }
 function canView(name) {
   const n = NAV.find(x => x.id === name);
@@ -410,25 +424,51 @@ VIEWS.submit = async (arg, tok) => {
         banner += `<div class="alert warn"><b>${esc(T('submit.resubmit'))}</b><p class="pre">${esc(prev.contractor_message || '')}</p><p>${esc(T('submit.resubmit_help', { n: (eq.version || 0) + 1 }))}</p></div>`;
       } catch (e) { /* message is optional */ }
     }
-    $('#n-form').innerHTML = `${banner}${list.map(c => {
+    const secs = [];
+    list.forEach((c, i) => { const nm = lbl(c, 'section'); let g = secs[secs.length - 1]; if (!g || g.name !== nm) { g = { name: nm, items: [] }; secs.push(g); } g.items.push({ c, n: i + 1 }); });
+    const itemHtml = (c, n) => {
       const hint = lbl(c, 'hint'), rl = lbl(c, 'reading_label');
       return `<section class="item" data-key="${esc(c.key)}">
-        <header><h3>${esc(lbl(c, 'label'))}</h3><span class="kind ${c.kind}">${esc(T(c.kind === 'video' ? 'submit.video' : 'submit.photo'))}${c.required ? '' : ''}</span></header>
+        <header><h3><span class="num">${n}</span>${esc(lbl(c, 'label'))}</h3><span class="kind ${c.kind}">${esc(T(c.kind === 'video' ? 'submit.video' : 'submit.photo'))}</span></header>
         ${hint ? `<p class="hint">${esc(hint)}</p>` : ''}${c.kind === 'video' ? `<p class="hint">${esc(T('submit.hint_video'))}</p>` : ''}
         <div class="thumbs" data-th="${esc(c.key)}"></div>
         <label class="btn pick"><input type="file" hidden data-pick="${esc(c.key)}" accept="${c.kind === 'video' ? 'video/*' : 'image/*'}" multiple>${esc(T(c.kind === 'video' ? 'submit.add_video' : 'submit.add_photo'))}</label>
         <input class="note" data-note="${esc(c.key)}" maxlength="500" placeholder="${esc(T('submit.note'))}">
         ${rl ? `<label class="reading"><span>${esc(rl)}</span><input data-reading="${esc(c.key)}" maxlength="20" inputmode="decimal"> ${esc(c.reading_unit || '')}</label>` : ''}
       </section>`;
-    }).join('')}
-    <div class="submitbar"><div><span id="n-count"></span><small id="n-saved"></small></div><button class="btn primary" id="n-go">${esc(T('submit.send'))}</button></div>`;
+    };
+    const otherHtml = (k, idx) => `<section class="item other" data-key="${esc(k)}">
+        <header><h3><span class="num">+</span>${esc(T('submit.other_n', { n: idx + 1 }))}</h3><button type="button" class="btn ghost sm" data-rmother="${esc(k)}">${esc(T('submit.remove'))}</button></header>
+        <textarea class="note" rows="2" data-note="${esc(k)}" maxlength="500" placeholder="${esc(T('submit.other_ph'))}"></textarea>
+        <div class="thumbs" data-th="${esc(k)}"></div>
+        <label class="btn pick"><input type="file" hidden data-pick="${esc(k)}" accept="image/*,video/*" multiple>${esc(T('submit.add_media'))}</label>
+      </section>`;
+    $('#n-form').innerHTML = `${banner}
+      <nav class="secnav" aria-label="${esc(T('submit.sections'))}">${secs.map((g, i) => `<button type="button" data-jump="${i}">${esc(g.name)} <b data-secprog="${i}"></b></button>`).join('')}<button type="button" data-jump="others">${esc(T('submit.others'))}</button></nav>
+      ${secs.map((g, i) => `<h2 class="sechead" id="sec-${i}">${esc(g.name)}</h2>${g.items.map(x => itemHtml(x.c, x.n)).join('')}`).join('')}
+      <h2 class="sechead" id="sec-others">${esc(T('submit.others'))}</h2>
+      <p class="hint">${esc(T('submit.others_help'))}</p>
+      <div id="n-others"></div>
+      <button type="button" class="btn addother" id="n-addother">+ ${esc(T('submit.add_other'))}</button>
+      <div class="submitbar"><div><span id="n-count"></span><small id="n-warn" class="warn" hidden>${esc(T('submit.other_incomplete'))}</small><small id="n-saved"></small></div><button class="btn primary" id="n-go">${esc(T('submit.send'))}</button></div>`;
 
     const required = list.filter(c => c.required);
     const itemOf = k => (S.draft.items[k] ||= { files: [], note: '', reading: '' });
+    const otherKeys = () => Object.keys(S.draft.items).filter(k => /^other_\d+$/.test(k)).sort((x, y) => Number(x.slice(6)) - Number(y.slice(6)));
     const ready = () => required.filter(c => itemOf(c.key).files.length > 0).length;
-    const bar = () => { $('#n-count').textContent = T('submit.ready', { a: ready(), b: required.length }); $('#n-go').disabled = ready() < required.length; };
+    const badOthers = () => otherKeys().some(k => { const d = itemOf(k); return d.files.length > 0 && !d.note.trim(); });
+    const bar = () => {
+      $('#n-count').textContent = T('submit.ready', { a: ready(), b: required.length });
+      secs.forEach((g, i) => {
+        const n = g.items.filter(x => itemOf(x.c.key).files.length > 0).length, el = $(`[data-secprog="${i}"]`);
+        if (el) { el.textContent = `${n}/${g.items.length}`; el.parentElement.classList.toggle('done', n === g.items.length); }
+      });
+      const bad = badOthers(); $('#n-warn').hidden = !bad;
+      $('#n-go').disabled = ready() < required.length || bad;
+    };
     const snapshot = () => ({ eqId: eq.id, draftId: S.draft.id, uploaded: S.draft.uploaded, items: Object.fromEntries(Object.entries(S.draft.items).map(([k, it]) => [k, { note: it.note, reading: it.reading, files: it.files.map(plain) }])) });
     const save = async () => {
+      if (!S.draft || S.draft.eq.id !== eq.id) return;   // sent or switched machine: nothing to save
       const ok = await draftPut(dkey, snapshot());
       const el = $('#n-saved'); if (el) el.textContent = ok ? T('draft.saved') : '';
       if (!ok) saveWarn();
@@ -439,30 +479,54 @@ VIEWS.submit = async (arg, tok) => {
       box.innerHTML = d.files.map(f => `<div class="th">${f.kind === 'video' ? `<video src="${esc(f.url)}" muted playsinline preload="metadata"></video>` : `<img src="${esc(f.url)}" alt="">`}<button type="button" data-rm="${esc(f.id)}" aria-label="${esc(T('submit.remove'))}">×</button></div>`).join('');
       $$('[data-rm]', box).forEach(b => b.onclick = () => { const i = d.files.findIndex(x => x.id === b.dataset.rm); if (i >= 0) { URL.revokeObjectURL(d.files[i].url); d.files.splice(i, 1); } thumbs(key); bar(); save(); });
     };
-    list.forEach(c => {
+    const bindItem = c => {
       const d = itemOf(c.key);
       thumbs(c.key);
-      const note = $(`[data-note="${c.key}"]`); note.value = d.note; note.oninput = () => { d.note = note.value; saveSoon(); };
+      const note = $(`[data-note="${c.key}"]`); note.value = d.note; note.oninput = () => { d.note = note.value; saveSoon(); bar(); };
       const rd = $(`[data-reading="${c.key}"]`); if (rd) { rd.value = d.reading; rd.oninput = () => { d.reading = rd.value; saveSoon(); }; }
       $(`[data-pick="${c.key}"]`).onchange = async e => {
         const picked = [...e.target.files]; e.target.value = '';
         for (const f of picked) {
-          if (c.kind === 'photo' && !f.type.startsWith('image/')) { toast(T('err.not_image'), 1); continue; }
-          if (c.kind === 'video' && !f.type.startsWith('video/')) { toast(T('err.not_video'), 1); continue; }
-          if (c.kind === 'video' && f.size > 40 * 1024 * 1024) { toast(T('err.video_big'), 1); continue; }
+          const kind = c.kind === 'any' ? (f.type.startsWith('video/') ? 'video' : f.type.startsWith('image/') ? 'photo' : null) : c.kind;
+          if (!kind) { toast(T('err.not_image'), 1); continue; }
+          if (kind === 'photo' && !f.type.startsWith('image/')) { toast(T('err.not_image'), 1); continue; }
+          if (kind === 'video' && !f.type.startsWith('video/')) { toast(T('err.not_video'), 1); continue; }
+          if (kind === 'video' && f.size > 40 * 1024 * 1024) { toast(T('err.video_big'), 1); continue; }
           if (d.files.length >= 8) { toast(T('err.too_many'), 1); break; }
-          try { const r = await readyFile(f, c.kind); d.files.push(withUrl({ id: uid8(), kind: c.kind, type: r.type, blob: r.blob })); }
+          try { const r = await readyFile(f, kind); d.files.push(withUrl({ id: uid8(), kind, type: r.type, blob: r.blob })); }
           catch (er) { toast(T('err.photo_read'), 1); }
         }
         thumbs(c.key); bar(); save();
       };
+    };
+    const drawOthers = () => {
+      const ks = otherKeys();
+      $('#n-others').innerHTML = ks.map(otherHtml).join('');
+      ks.forEach(k => bindItem({ key: k, kind: 'any' }));
+      $$('[data-rmother]').forEach(b => b.onclick = () => {
+        const k = b.dataset.rmother; (itemOf(k).files || []).forEach(f => URL.revokeObjectURL(f.url));
+        delete S.draft.items[k]; drawOthers(); bar(); save();
+      });
+      $('#n-addother').hidden = ks.length >= 10;
+    };
+    $('#n-addother').onclick = () => {
+      const ks = otherKeys(); const n = ks.length ? Number(ks[ks.length - 1].slice(6)) + 1 : 1;
+      itemOf('other_' + n); drawOthers(); bar(); save();
+      const el = $(`[data-note="other_${n}"]`); if (el) el.focus();
+    };
+    $$('[data-jump]').forEach(b => b.onclick = () => {
+      const el = document.getElementById(b.dataset.jump === 'others' ? 'sec-others' : 'sec-' + b.dataset.jump);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
+    list.forEach(bindItem);
+    drawOthers();
     bar();
     if (S.draft.restored) save();
     $('#n-go').onclick = async () => {
       const btn = $('#n-go'); btn.disabled = true;
       const jobs = [];
-      list.forEach(c => itemOf(c.key).files.forEach(f => jobs.push({ c, f, path: `${eq.id}/${S.draft.id}/${c.key}-${f.id}.${extFor(f, c.kind)}` })));
+      const all = [...list, ...otherKeys().map(k => ({ key: k, kind: 'any' }))];
+      all.forEach(c => itemOf(c.key).files.forEach(f => jobs.push({ c, f, path: `${eq.id}/${S.draft.id}/${c.key}-${f.id}.${extFor(f, f.kind)}` })));
       let done = jobs.filter(j => S.draft.uploaded[j.f.id]).length;
       const prog = () => { btn.textContent = T('submit.uploading', { a: done, b: jobs.length }); };
       prog();
@@ -471,10 +535,10 @@ VIEWS.submit = async (arg, tok) => {
           const { blob, type } = await prepareUpload(j.f); await uploadFile(j.path, blob, type);
           S.draft.uploaded[j.f.id] = j.path; done++; prog(); await draftPut(dkey, snapshot());
         });
-        const items = list.map(c => {
+        const items = all.map(c => {
           const d = itemOf(c.key);
           return { key: c.key, files: jobs.filter(j => j.c.key === c.key).map(j => j.path), note: d.note.trim(), reading: (d.reading || '').trim() };
-        }).filter(i => i.files.length);
+        }).filter(i => i.files.length || i.note);
         const id = await q(sb.rpc('submit_inspection', { p_equipment_id: eq.id, p_items: items }));
         await draftDel(dkey); S.draft = null; toast(T('submit.sent'));
         location.hash = '#/inspection/' + id;
@@ -585,10 +649,12 @@ VIEWS.inspection = async (id, tok) => {
   const hseForm = r === 'hse' && ins.status === 'awaiting_hse';
   const opsForm = r === 'operations' && ins.status === 'awaiting_ops';
 
+  let lastSec = null;
   const itemsHtml = ins.items.map(i => {
     const rt = ratings[i.key];
     const rl = lbl(i, 'reading_label');
-    return `<article class="item" data-key="${esc(i.key)}">
+    const sn = lbl(i, 'section'); const head = sn && sn !== lastSec ? (lastSec = sn, `<h4 class="sechead">${esc(sn)}</h4>`) : '';
+    return `${head}<article class="item" data-key="${esc(i.key)}">
       <header><h3>${esc(lbl(i, 'label'))}</h3>${rt ? `<span class="sevchip sev-${esc(rt.sev)}">${esc(T('sev.' + rt.sev))}</span>` : ''}</header>
       ${i.note ? `<p class="pre">${esc(i.note)}</p>` : ''}${i.reading ? `<p class="muted">${esc(rl || T('detail.reading'))}: <b>${esc(i.reading)}</b> ${esc(i.reading_unit || '')}</p>` : ''}
       ${rt && rt.note ? `<p class="rnote">${esc(rt.note)}</p>` : ''}
@@ -598,6 +664,10 @@ VIEWS.inspection = async (id, tok) => {
     </article>`;
   }).join('');
 
+  const xs = (hse && hse.extra_findings) || [];
+  const extraHtml = hseForm
+    ? `<h4 class="sechead">${esc(T('hse.extra_title'))}</h4><p class="hint">${esc(T('hse.extra_help'))}</p><div id="h-extras"></div><button type="button" class="btn" id="h-addx">+ ${esc(T('hse.extra_add'))}</button>`
+    : (xs.length ? `<h4 class="sechead">${esc(T('hse.extra_title'))}</h4>${xs.map(x => `<div class="item"><header><span class="sevchip sev-${esc(x.sev)}">${esc(T('sev.' + x.sev))}</span></header><p class="pre">${esc(x.note)}</p></div>`).join('')}` : '');
   const verHtml = vers.length > 1 ? `<nav class="vers" aria-label="${esc(T('detail.versions'))}">${vers.map(v => `<a href="#/inspection/${esc(v.id)}" class="${v.id === id ? 'on' : ''}">${esc(T('card.version', { n: v.version }))}</a>`).join('')}</nav>` : '';
   const facts = [[T('detail.contractor'), e.company], [T('detail.serial'), e.serial], [T('detail.rig'), e.rig], [T('detail.cert'), null], [T('detail.sent_by'), ins.inspector_name], [T('detail.sent_on'), fmtDT(ins.created_at)]];
   const certDays = e.cert_expiry ? Math.round((new Date(e.cert_expiry + 'T00:00:00') - new Date(todayISO() + 'T00:00:00')) / 86400000) : null;
@@ -632,12 +702,17 @@ VIEWS.inspection = async (id, tok) => {
     <section class="panel head s-${esc(st)}"><div class="headtop">${stagePill(st)}<span class="muted">${esc(T('card.version', { n: ins.version }))}${latest ? '' : ' · ' + esc(T('detail.old_version'))}</span></div>
       <dl class="facts">${factsHtml}</dl>${verHtml}${status}</section>
     ${msg}${resend ? `<div class="actionrow">${resend}</div>` : ''}
-    <section class="panel"><h3>${esc(T('detail.items'))}</h3><div class="items">${itemsHtml}</div></section>
+    <section class="panel"><h3>${esc(T('detail.items'))}</h3><div class="items">${itemsHtml}${extraHtml}</div></section>
     ${condHtml}${revHtml}${hseHtml}${opsHtml}${auditHtml}`)) return;
   $('#actions').innerHTML = `<a class="btn" href="#/report/${esc(id)}">${esc(T('detail.report'))}</a>`;
   bindCond($('#body'), route);
 
   if (hseForm) {
+    $('#h-addx').onclick = () => {
+      const d = document.createElement('div'); d.className = 'xrow';
+      d.innerHTML = `<select class="xsev" aria-label="${esc(T('hse.extra_title'))}">${['minor', 'major', 'critical'].map(v => `<option value="${v}">${esc(T('sev.' + v))}</option>`).join('')}</select><input class="xnote" maxlength="500" placeholder="${esc(T('hse.extra_ph'))}"><button type="button" class="btn ghost sm" aria-label="${esc(T('submit.remove'))}">×</button>`;
+      $('button', d).onclick = () => d.remove(); $('#h-extras').append(d); $('.xnote', d).focus();
+    };
     $('#h-verdict').onchange = ev => { $('#h-msgwrap').hidden = ev.target.value !== 'more_info'; };
     $('#h-go').onclick = async () => {
       const verdict = $('#h-verdict').value;
@@ -649,7 +724,7 @@ VIEWS.inspection = async (id, tok) => {
       });
       const b = $('#h-go'); b.disabled = true;
       try {
-        await q(sb.rpc('hse_review', { p_inspection_id: id, p_verdict: verdict, p_comment: $('#h-comment').value, p_ratings: ratingsOut, p_contractor_message: verdict === 'more_info' ? $('#h-msg').value : null }));
+        await q(sb.rpc('hse_review', { p_inspection_id: id, p_verdict: verdict, p_comment: $('#h-comment').value, p_ratings: ratingsOut, p_contractor_message: verdict === 'more_info' ? $('#h-msg').value : null, p_extra: $$('.xrow').map(r => ({ sev: $('.xsev', r).value, note: $('.xnote', r).value.trim() })).filter(x => x.note) }));
         toast(T('hse.done')); route();
       } catch (er) { fail(er); b.disabled = false; }
     };
@@ -772,14 +847,17 @@ VIEWS.report = async (id, tok) => {
   const hse = revs.find(x => x.dept === 'HSE'), ratings = (hse && hse.item_ratings) || {};
   const draw = () => {
     const internal = staff && S.reportInternal;
+    let lastSec = null;
+    const xs = (hse && hse.extra_findings) || [];
     const findings = ins.items.map(i => {
       const rt = ratings[i.key];
+      const sn = lbl(i, 'section'); const head = sn && sn !== lastSec ? (lastSec = sn, `<h4 class="sechead">${esc(sn)}</h4>`) : '';
       const photos = (i.files || []).filter(p => !isVideo(p) && urls[p]).map(p => `<img class="rimg" src="${esc(urls[p])}" alt="">`).join('');
       const vids = (i.files || []).filter(isVideo).length;
-      return `<div class="ritem"><div class="rhead"><b>${esc(lbl(i, 'label'))}</b>${internal && rt ? `<span class="sevchip sev-${esc(rt.sev)}">${esc(T('sev.' + rt.sev))}</span>` : ''}</div>
+      return `${head}<div class="ritem"><div class="rhead"><b>${esc(lbl(i, 'label'))}</b>${internal && rt ? `<span class="sevchip sev-${esc(rt.sev)}">${esc(T('sev.' + rt.sev))}</span>` : ''}</div>
         ${i.note ? `<p class="pre">${esc(i.note)}</p>` : ''}${i.reading ? `<p>${esc(lbl(i, 'reading_label') || T('detail.reading'))}: ${esc(i.reading)} ${esc(i.reading_unit || '')}</p>` : ''}
         ${internal && rt && rt.note ? `<p class="rnote">${esc(rt.note)}</p>` : ''}<div class="rimgs">${photos}</div>${vids ? `<p class="muted small">${esc(T('report.video'))} (${vids})</p>` : ''}</div>`;
-    }).join('');
+    }).join('') + (internal && xs.length ? `<h4 class="sechead">${esc(T('hse.extra_title'))}</h4>${xs.map(x => `<div class="ritem"><div class="rhead"><span class="sevchip sev-${esc(x.sev)}">${esc(T('sev.' + x.sev))}</span></div><p class="pre">${esc(x.note)}</p></div>`).join('')}` : '');
     $('#rbody').innerHTML = `<header class="rtitle"><h2>${esc(T('app.name'))} — ${esc(T('report.title'))}</h2><p class="muted">${esc(T('report.generated', { d: fmtDT(new Date()), n: S.profile.full_name || S.profile.email }))}</p></header>
       <dl class="facts rfacts"><div><dt>${esc(T('reg.tag'))}</dt><dd><b>${esc(e.tag)}</b> — ${esc(T('type.' + e.type))}</dd></div>
         <div><dt>${esc(T('detail.contractor'))}</dt><dd>${esc(e.company || '—')}</dd></div><div><dt>${esc(T('detail.serial'))}</dt><dd>${esc(e.serial || '—')}</dd></div>
@@ -801,7 +879,24 @@ VIEWS.report = async (id, tok) => {
 };
 
 /* ---------- boot ---------- */
+function testUsers() { return (window.CFG && CFG.TEST_MODE && CFG.TEST_USERS) || []; }
+async function testSignIn(i) {
+  const u = testUsers()[i]; if (!u) return false;
+  const { error } = await sb.auth.signInWithPassword({ email: u.email, password: u.password });
+  if (error) return error.message;
+  try { localStorage.setItem('hse.testUser', String(i)); } catch (e) {}
+  return true;
+}
 async function start() {
+  if (!S.session && testUsers().length && !S.testFailed) {
+    let i = 0; try { i = Number(localStorage.getItem('hse.testUser')) || 0; } catch (e) {}
+    $('#root').innerHTML = '<div class="authwrap single"><section class="authcard"><p>…</p></section></div>';
+    const r = await testSignIn(i < testUsers().length ? i : 0);
+    if (r === true) return;               // onAuthStateChange will call start() again
+    S.testFailed = true;
+    renderAuth('signin', String(r));
+    return;
+  }
   if (!S.session) { renderAuth(); return; }
   try { S.profile = await q(sb.from('profiles').select('*').eq('id', S.session.user.id).single()); }
   catch (e) { $('#root').innerHTML = `<div class="authwrap single"><section class="authcard"><div class="alert bad">${esc(e.message || e)}</div><button class="btn" onclick="location.reload()">${esc(T('common.refresh'))}</button></section></div>`; return; }

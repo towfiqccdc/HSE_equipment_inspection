@@ -25,13 +25,18 @@ These are in the database, not just the screen, so they cannot be bypassed from 
 - Nothing is lost if the app is closed or the connection drops: photos, videos, notes and readings are saved on the phone as they are added. Reopening the app restores the draft, and a failed send resumes without re-uploading files that already went through.
 
 ## Testing mode (on now)
-The login page shows one-tap buttons: Contractor, a second Contractor, HSE, Operations and Admin. No email or password is typed. Sign out to switch to another role.
+There is no login page. The app opens straight on the main page, signed in as a test Contractor. A **Test as** bar (top on a phone, left menu on a computer) switches between Contractor, a second Contractor, HSE, Operations and Admin in one tap. Nothing is typed.
 
 These are real accounts with a password that is written in `config.js`, which is public. Anyone who opens the page can use them. That is fine for test data only. **Before real use:** set `TEST_MODE: false` in `config.js` and delete the test accounts in the Supabase SQL editor:
 
 ```sql
 delete from auth.users where email like '%.test@example.com';
 ```
+
+## Checklists
+The crane checklist has 21 items in walk-around order, in sections: Machine and papers, Ground level, Hook and rope, Safety devices, Cab. The form shows a section bar to jump between sections and a count per section. Forklifts use the same section idea.
+
+At the bottom is **Others**. The contractor taps **+ Add observation** (up to 10) to report anything else, with a description and optional photos or video. HSE can also add its own observations with a severity in the review form. A critical one blocks acceptance, like any critical item.
 
 ## Set up
 1. The database is already migrated (`supabase/migrations/20261123_joint_inspection.sql`).
