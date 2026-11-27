@@ -339,3 +339,10 @@ h4.sechead { font-size: 22px; margin: 22px 0 4px; }
   .afields, .amore { grid-template-columns: 1fr; }
   .arow { grid-template-columns: 30px 1fr; } .acon { grid-column: 2; flex-direction: row; justify-content: space-between; align-items: center; width: 100%; }
 }
+
+.pickwrap{position:relative;display:inline-block}
+.pickmenu{display:flex;flex-direction:column;margin-top:6px;background:#fff;border:1px solid #1B2630;min-width:230px;box-shadow:0 6px 18px rgba(0,0,0,.18)}
+.pickmenu[hidden]{display:none}
+.pickmenu label{padding:14px 16px;font-weight:600;cursor:pointer;border-bottom:1px solid #dde3e8}
+.pickmenu label:last-child{border-bottom:0}
+.pickmenu label:active{background:#fde9dd}

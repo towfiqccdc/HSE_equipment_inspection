@@ -369,7 +369,11 @@ VIEWS.new = async (_, tok) => {
   const saveSoon = later(save);
 
   const sevPick = (k, cur, only) => `<div class="sevpick" data-sevbox="${esc(k)}">${(only || SEVS).map(s => `<label class="sev-${s}"><input type="radio" name="sev-${esc(k)}" value="${s}" data-sevr="${esc(k)}" ${cur === s ? 'checked' : ''}><span>${esc(T('sev.' + s))}</span></label>`).join('')}</div>`;
-  const pickBtn = k => `<label class="btn pick"><input type="file" hidden data-pick="${esc(k)}" accept="image/*,video/*" multiple>+ ${esc(T('new.add_media'))}</label>`;
+  const pickBtn = k => `<div class="pickwrap"><button type="button" class="btn pick" data-pickmenu="1">+ ${esc(T('new.add_media'))}</button>
+    <div class="pickmenu" hidden>
+      <label><input type="file" hidden data-pick="${esc(k)}" accept="image/*" capture="environment">${esc(T('new.take_photo'))}</label>
+      <label><input type="file" hidden data-pick="${esc(k)}" accept="video/*" capture="environment">${esc(T('new.take_video'))}</label>
+      <label><input type="file" hidden data-pick="${esc(k)}" accept="image/*,video/*" multiple>${esc(T('new.from_gallery'))}</label></div></div>`;
   const itemHtml = (c, n) => {
     const it = slot(c.key), hint = lbl(c, 'hint'), rl = lbl(c, 'reading_label');
     return `<section class="item" data-key="${esc(c.key)}">
@@ -535,6 +539,10 @@ VIEWS.new = async (_, tok) => {
     }
   });
   form.addEventListener('click', e => {
+    const pm = e.target.closest('[data-pickmenu]');
+    $$('.pickmenu').forEach(m => { if (!pm || m !== pm.nextElementSibling) m.hidden = true; });
+    if (pm) { pm.nextElementSibling.hidden = !pm.nextElementSibling.hidden; return; }
+    if (e.target.closest('.pickmenu')) setTimeout(() => $$('.pickmenu').forEach(m => m.hidden = true), 300);
     const b = e.target.closest('[data-rmother]'); if (!b) return;
     const o = dr.others.find(x => x.id === b.dataset.rmother); if (o) o.files.forEach(f => URL.revokeObjectURL(f.url));
     dr.others = dr.others.filter(x => x.id !== b.dataset.rmother);
