@@ -339,6 +339,3 @@ h4.sechead { font-size: 22px; margin: 22px 0 4px; }
   .afields, .amore { grid-template-columns: 1fr; }
   .arow { grid-template-columns: 30px 1fr; } .acon { grid-column: 2; flex-direction: row; justify-content: space-between; align-items: center; width: 100%; }
 }
-
-.pickrow{display:flex;flex-wrap:wrap;gap:8px}
-.pickrow .btn{flex:1 1 auto;text-align:center}

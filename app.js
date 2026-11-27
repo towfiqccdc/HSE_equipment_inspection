@@ -369,10 +369,7 @@ VIEWS.new = async (_, tok) => {
   const saveSoon = later(save);
 
   const sevPick = (k, cur, only) => `<div class="sevpick" data-sevbox="${esc(k)}">${(only || SEVS).map(s => `<label class="sev-${s}"><input type="radio" name="sev-${esc(k)}" value="${s}" data-sevr="${esc(k)}" ${cur === s ? 'checked' : ''}><span>${esc(T('sev.' + s))}</span></label>`).join('')}</div>`;
-  const pickBtn = k => `<div class="pickrow">
-    <label class="btn pick"><input type="file" hidden data-pick="${esc(k)}" accept="image/*" capture="environment">${esc(T('new.take_photo'))}</label>
-    <label class="btn pick"><input type="file" hidden data-pick="${esc(k)}" accept="video/*" capture="environment">${esc(T('new.take_video'))}</label>
-    <label class="btn pick"><input type="file" hidden data-pick="${esc(k)}" accept="image/*,video/*" multiple>${esc(T('new.add_media'))}</label></div>`;
+  const pickBtn = k => `<label class="btn pick"><input type="file" hidden data-pick="${esc(k)}" accept="image/*,video/*" multiple>+ ${esc(T('new.add_media'))}</label>`;
   const itemHtml = (c, n) => {
     const it = slot(c.key), hint = lbl(c, 'hint'), rl = lbl(c, 'reading_label');
     return `<section class="item" data-key="${esc(c.key)}">
