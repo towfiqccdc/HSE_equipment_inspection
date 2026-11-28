@@ -422,7 +422,7 @@ VIEWS.new = async (_, tok) => {
         </div>
       </section>
       <nav class="secnav" aria-label="${esc(T('new.sections'))}">${secs.map((g, i) => `<button type="button" data-jump="${i}">${esc(g.name)} <b data-secprog="${i}"></b></button>`).join('')}<button type="button" data-jump="others">${esc(T('new.others'))}</button><button type="button" data-jump="result">${esc(T('new.comment'))}</button></nav>
-      ${secs.map((g, i) => `<h2 class="sechead" id="sec-${i}"><span>${esc(g.name)}</span><button type="button" class="btn sm" data-allok="${i}">${esc(T('new.all_ok'))}</button></h2>${g.items.map(x => itemHtml(x.c, x.n)).join('')}`).join('')}
+      ${secs.map((g, i) => `<h2 class="sechead" id="sec-${i}"><span>${esc(g.name)}</span></h2>${g.items.map(x => itemHtml(x.c, x.n)).join('')}`).join('')}
       <h2 class="sechead" id="sec-others"><span>${esc(T('new.others'))}</span></h2>
       <p class="hint">${esc(T('new.others_help'))}</p>
       <div id="n-others">${dr.others.map(otherHtml).join('')}</div>
@@ -437,10 +437,6 @@ VIEWS.new = async (_, tok) => {
     $$('[data-jump]').forEach(b => b.onclick = () => {
       const el = document.getElementById(b.dataset.jump === 'others' ? 'sec-others' : b.dataset.jump === 'result' ? 'sec-result' : 'sec-' + b.dataset.jump);
       if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-    $$('[data-allok]').forEach(b => b.onclick = () => {
-      secs[Number(b.dataset.allok)].items.forEach(x => { const it = slot(x.c.key); if (!it.sev) { it.sev = 'ok'; const r = $(`input[name="sev-${x.c.key}"][value="ok"]`); if (r) r.checked = true; } });
-      bar(); drawResult(); save();
     });
     $('#n-addother').onclick = () => {
       const o = { id: uuid().slice(0, 8), sev: 'minor', note: '', files: [] };
