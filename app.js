@@ -255,6 +255,7 @@ async function pool(items, n, fn) {
   }));
   if (errs.length) throw errs[0];
 }
+const isPhone = () => !!(window.matchMedia && matchMedia('(pointer: coarse)').matches);
 const extFor = f => f.kind === 'photo' ? 'jpg' : ({ 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' }[f.type] || 'mp4');
 // Photos are shrunk once, when added, so a draft saved on the phone stays small.
 async function readyFile(file, kind) {
@@ -369,7 +370,7 @@ VIEWS.new = async (_, tok) => {
   const saveSoon = later(save);
 
   const sevPick = (k, cur, only) => `<div class="sevpick" data-sevbox="${esc(k)}">${(only || SEVS).map(s => `<label class="sev-${s}"><input type="radio" name="sev-${esc(k)}" value="${s}" data-sevr="${esc(k)}" ${cur === s ? 'checked' : ''}><span>${esc(T('sev.' + s))}</span></label>`).join('')}</div>`;
-  const touchUI = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+  const touchUI = isPhone();
   const pickBtn = k => touchUI ? `<div class="pickwrap"><button type="button" class="btn pick" data-pickmenu="1">+ ${esc(T('new.add_media'))}</button>
     <div class="pickmenu" hidden>
       <label><input type="file" hidden data-pick="${esc(k)}" data-cam="1" accept="image/*" capture="environment">${esc(T('new.take_photo'))}</label>
@@ -450,6 +451,7 @@ VIEWS.new = async (_, tok) => {
     };
     $('#n-discard').onclick = async () => {
       if (!confirm(T('new.discard_ask'))) return;
+      [...Object.values(dr.items), ...dr.others].forEach(x => (x.files || []).forEach(dropFile));
       await draftDel(key); S.draft = null; location.hash = '#/'; route();
     };
     $('#n-go').onclick = finish;
@@ -458,8 +460,27 @@ VIEWS.new = async (_, tok) => {
   const thumbs = k => {
     const box = $(`[data-th="${k}"]`); if (!box) return;
     const it = slot(k); if (!it) return;
-    box.innerHTML = it.files.map(f => `<div class="th">${f.kind === 'video' ? `<video src="${esc(f.url)}" muted playsinline preload="metadata"></video>` : `<img src="${esc(f.url)}" alt="">`}<button type="button" data-rm="${esc(f.id)}" aria-label="${esc(T('common.remove'))}">×</button></div>`).join('');
-    $$('[data-rm]', box).forEach(b => b.onclick = () => { const i = it.files.findIndex(x => x.id === b.dataset.rm); if (i >= 0) { URL.revokeObjectURL(it.files[i].url); it.files.splice(i, 1); } thumbs(k); bar(); save(); });
+    box.innerHTML = it.files.map(f => `<div class="th"><i class="upstate${dr.uploaded[f.id] ? ' ok' : ''}"></i>${f.kind === 'video' ? `<video src="${esc(f.url)}" muted playsinline preload="metadata"></video>` : `<img src="${esc(f.url)}" alt="">`}<button type="button" data-rm="${esc(f.id)}" aria-label="${esc(T('common.remove'))}">×</button></div>`).join('');
+    $$('[data-rm]', box).forEach(b => b.onclick = () => { const i = it.files.findIndex(x => x.id === b.dataset.rm); if (i >= 0) { dropFile(it.files[i]); it.files.splice(i, 1); } thumbs(k); bar(); save(); });
+  };
+  // Each photo or video is sent to the database in the background as soon as it is added; removing it also removes it there.
+  const inflight = {};
+  const pathFor = (k, f) => `${dr.id}/${k}-${f.id}.${extFor(f)}`;
+  const bgUpload = (k, f) => {
+    if (dr.uploaded[f.id] || inflight[f.id]) return;
+    const path = pathFor(k, f);
+    inflight[f.id] = (async () => {
+      try {
+        await uploadFile(path, f.blob, f.type);
+        if (f.gone) { await sb.storage.from(BUCKET).remove([path]).catch(() => {}); return; }
+        dr.uploaded[f.id] = path; save(); thumbs(k);
+      } catch (e) { /* offline or failed: Finish uploads it again */ } finally { delete inflight[f.id]; }
+    })();
+  };
+  const dropFile = f => {
+    f.gone = true; try { URL.revokeObjectURL(f.url); } catch (e) { /* ignore */ }
+    const p = dr.uploaded[f.id];
+    if (p) { delete dr.uploaded[f.id]; sb.storage.from(BUCKET).remove([p]).catch(() => {}); }
   };
   const critical = () => listFor().some(c => slot(c.key).sev === 'critical') || dr.others.some(o => o.note.trim() && o.sev === 'critical');
   const missing = () => {
@@ -501,6 +522,7 @@ VIEWS.new = async (_, tok) => {
     const keep = [...list.map(c => ({ k: c.key })), ...dr.others.filter(o => o.note.trim()).map(o => ({ k: 'o_' + o.id }))];
     const jobs = [];
     keep.forEach(({ k }) => slot(k).files.forEach(f => jobs.push({ f, path: `${dr.id}/${k}-${f.id}.${extFor(f)}` })));
+    await Promise.all(Object.values(inflight));
     let done = jobs.filter(j => dr.uploaded[j.f.id]).length;
     const prog = () => { btn.textContent = T('new.uploading', { a: done, b: jobs.length }); };
     prog();
@@ -515,7 +537,9 @@ VIEWS.new = async (_, tok) => {
         items: list.map(c => { const it = slot(c.key); return { key: c.key, sev: it.sev, note: it.note.trim(), reading: (it.reading || '').trim(), files: paths(c.key) }; }),
         others: dr.others.filter(o => o.note.trim()).map(o => ({ sev: o.sev, note: o.note.trim(), files: paths('o_' + o.id) })) };
       await q(sb.rpc('save_inspection', { p_data: payload }));
-      await draftDel(key); S.draft = null; toast(T('new.saved'));
+      const usedPaths = new Set(jobs.map(j => j.path)), strays = Object.values(dr.uploaded).filter(p => !usedPaths.has(p));
+      if (strays.length) sb.storage.from(BUCKET).remove(strays).catch(() => {});
+      await draftDel(key); S.draft = null; S.justSaved = dr.id; toast(T('new.saved'));
       location.hash = '#/inspection/' + dr.id;
     } catch (e) { fail(e); btn.textContent = T('new.finish'); bar(); }
   }
@@ -542,7 +566,7 @@ VIEWS.new = async (_, tok) => {
         if (!kind) { toast(T('err.not_media'), 1); continue; }
         if (kind === 'video' && f.size > 40 * 1024 * 1024) { toast(T('err.video_big'), 1); continue; }
         if (it.files.length >= 8) { toast(T('err.too_many'), 1); break; }
-        try { const r = await readyFile(f, kind); it.files.push(withUrl({ id: uid8(), kind, type: r.type, blob: r.blob })); }
+        try { const r = await readyFile(f, kind), nf = withUrl({ id: uid8(), kind, type: r.type, blob: r.blob }); it.files.push(nf); bgUpload(k, nf); }
         catch (er) { toast(T('err.photo_read'), 1); }
       }
       thumbs(k); bar(); save();
@@ -554,12 +578,14 @@ VIEWS.new = async (_, tok) => {
     if (pm) { pm.nextElementSibling.hidden = !pm.nextElementSibling.hidden; return; }
     if (e.target.closest('.pickmenu')) setTimeout(() => $$('.pickmenu').forEach(m => m.hidden = true), 300);
     const b = e.target.closest('[data-rmother]'); if (!b) return;
-    const o = dr.others.find(x => x.id === b.dataset.rmother); if (o) o.files.forEach(f => URL.revokeObjectURL(f.url));
+    const o = dr.others.find(x => x.id === b.dataset.rmother); if (o) o.files.forEach(dropFile);
     dr.others = dr.others.filter(x => x.id !== b.dataset.rmother);
     b.closest('.item').remove(); $$('#n-others .item.other h3').forEach((h, i) => { h.lastChild.textContent = T('new.obs', { n: i + 1 }); });
     drawResultIfNeeded(); bar(); save();
   });
   function drawResultIfNeeded() { drawResult(); }
+  Object.entries(dr.items).forEach(([k, it]) => (it.files || []).forEach(f => bgUpload(k, f)));
+  dr.others.forEach(o => o.files.forEach(f => bgUpload('o_' + o.id, f)));
   if (dr.restored) { dr.restored = false; save(); }
 };
 
@@ -626,6 +652,7 @@ VIEWS.inspection = async (id, tok) => {
 
   let current = null, seq = 0;
   const status = $('#rstatus'), dl = $('#r-dl'), sh = $('#r-share');
+  if (!isPhone()) sh.hidden = true; else { sh.classList.add('primary'); dl.classList.remove('primary'); }
   const make = async () => {
     const my = ++seq, rl = 'en';
     dl.disabled = sh.disabled = true; current = null;
@@ -634,6 +661,7 @@ VIEWS.inspection = async (id, tok) => {
       const r = await buildReport(ins, urls, rl, (a, b) => { if (my === seq) status.textContent = T('rep.photos', { a, b }); });
       if (my !== seq) return;
       current = r; status.textContent = T('rep.ready', { name: r.name, kb: Math.round(r.blob.size / 1024) }); dl.disabled = sh.disabled = false;
+      if (S.justSaved === ins.id && isPhone()) { S.justSaved = null; downloadBlob(r.blob, r.name); status.textContent += ' — ' + T('rep.auto_saved'); }
     } catch (e) { if (my === seq) { status.textContent = T('rep.failed') + ' ' + (e.message || ''); status.className = 'bad'; } }
   };
   dl.onclick = () => current && downloadBlob(current.blob, current.name);

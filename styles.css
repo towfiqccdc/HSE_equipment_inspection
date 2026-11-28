@@ -412,3 +412,9 @@ input, select, textarea { box-shadow: inset 0 1px 2px rgba(60,45,30,.08); }
 .seg span { box-shadow: 0 1px 2px rgba(60,45,30,.12); }
 .submitbar { box-shadow: 0 -4px 18px rgba(60,45,30,.14); }
 .tagcard { box-shadow: 0 1px 3px rgba(60,45,30,.12), 0 8px 18px rgba(60,45,30,.06); }
+
+.th .upstate { position: absolute; left: 4px; bottom: 4px; width: 16px; height: 16px; border-radius: 50%; background: #d9941a; box-shadow: 0 0 0 2px #fff; animation: upspin 1s linear infinite; }
+.th .upstate.ok { background: #2b8a57; animation: none; }
+.th .upstate.ok::after { content: "\2713"; color: #fff; font-size: 11px; line-height: 16px; display: block; text-align: center; }
+@keyframes upspin { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .th .upstate { animation: none; } }
