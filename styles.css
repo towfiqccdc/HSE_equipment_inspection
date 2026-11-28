@@ -346,3 +346,49 @@ h4.sechead { font-size: 22px; margin: 22px 0 4px; }
 .pickmenu label{padding:14px 16px;font-weight:600;cursor:pointer;border-bottom:1px solid #dde3e8}
 .pickmenu label:last-child{border-bottom:0}
 .pickmenu label:active{background:#fde9dd}
+
+/* ---- calm light look (v9): off-white page, white side panel, soft rounded fields, one red accent ---- */
+:root { --body: "Inter", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; --cond: var(--body);
+  --concrete: #faf8f5; --paper: #fff; --line: #e6e1da; --line-soft: #efebe5; --ink: #1d1a17; --muted: #6f6a63;
+  --orange: #b8321f; --orange-dark: #96271a; --steel-700: #4a443d; --steel-300: #c9c3ba; }
+body { background: var(--concrete); }
+h1, h2, h3, h4 { font-weight: 600; letter-spacing: -.01em; }
+.btn { border: 1px solid var(--line); border-radius: 8px; box-shadow: none; }
+.btn:hover { background: #f3efe9; }
+.btn.primary { background: var(--orange); border-color: var(--orange); }
+.btn.primary:hover { background: var(--orange-dark); }
+input, select, textarea { border: 1px solid var(--line); border-radius: 8px; background: #f6f3ee; }
+input:focus, select:focus, textarea:focus { background: #fff; outline: 2px solid #e7b3a9; outline-offset: 0; }
+.field > span { color: var(--muted); font-weight: 500; }
+.panel, .item, .tagcard, .draftcard, .reportbox { border-radius: 10px; border-color: var(--line); box-shadow: none; }
+.side { background: #fff; color: var(--ink); border-right: 1px solid var(--line); }
+.sidebrand { border-bottom: 1px solid var(--line-soft); }
+.sidebrand *, .side .brand { color: var(--ink); }
+.nav a { color: var(--muted); border-radius: 8px; margin: 2px 10px; border-left: 0 !important; }
+.nav a:hover { background: #f3efe9; color: var(--ink); }
+.nav a.on { background: #f3efe9; color: var(--ink); font-weight: 600; }
+.nav a.on::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--orange); margin-right: 10px; }
+.sidefoot { border-top: 1px solid var(--line-soft); color: var(--muted); }
+.sidefoot * { color: inherit; }
+.langs button { color: var(--muted); }
+.langs button.on { background: var(--ink); color: #fff; }
+.modesw { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+.modesw button, .modesw a { color: var(--muted); }
+.modesw .on { background: var(--ink); color: #fff; }
+.sechead { color: var(--ink); border-bottom: 1px solid var(--line); }
+.chip { border-radius: 999px; }
+.chip.on, .seg input:checked + span, .vers a.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.submitbar { background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 -6px 20px rgba(60,45,30,.08); }
+.submitbar .muted, .submitbar small { color: var(--muted); }
+.item h3 .num, .arow .num { background: #f0ebe4; color: var(--ink); border-radius: 6px; }
+.topbar { background: #fff; color: var(--ink); border-bottom: 1px solid var(--line); }
+.topbar * { color: inherit; }
+.pickmenu { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.pickmenu label:active { background: #f3efe9; }
+.hole { display: none; }
+
+.nav a { position: relative; padding-left: 28px; }
+.nav a.on::before { position: absolute; left: 13px; top: 50%; margin: -3.5px 0 0; }
+.sevpick, .sevs { gap: 6px; }
+.sevpick { gap: 6px; }
+.sevpick span { border: 1px solid var(--line); border-radius: 8px; margin-right: 0; background: #fff; }

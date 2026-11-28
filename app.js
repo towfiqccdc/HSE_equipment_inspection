@@ -369,11 +369,20 @@ VIEWS.new = async (_, tok) => {
   const saveSoon = later(save);
 
   const sevPick = (k, cur, only) => `<div class="sevpick" data-sevbox="${esc(k)}">${(only || SEVS).map(s => `<label class="sev-${s}"><input type="radio" name="sev-${esc(k)}" value="${s}" data-sevr="${esc(k)}" ${cur === s ? 'checked' : ''}><span>${esc(T('sev.' + s))}</span></label>`).join('')}</div>`;
-  const pickBtn = k => `<div class="pickwrap"><button type="button" class="btn pick" data-pickmenu="1">+ ${esc(T('new.add_media'))}</button>
+  const touchUI = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+  const pickBtn = k => touchUI ? `<div class="pickwrap"><button type="button" class="btn pick" data-pickmenu="1">+ ${esc(T('new.add_media'))}</button>
     <div class="pickmenu" hidden>
-      <label><input type="file" hidden data-pick="${esc(k)}" accept="image/*" capture="environment">${esc(T('new.take_photo'))}</label>
-      <label><input type="file" hidden data-pick="${esc(k)}" accept="video/*" capture="environment">${esc(T('new.take_video'))}</label>
-      <label><input type="file" hidden data-pick="${esc(k)}" accept="image/*,video/*" multiple>${esc(T('new.from_gallery'))}</label></div></div>`;
+      <label><input type="file" hidden data-pick="${esc(k)}" data-cam="1" accept="image/*" capture="environment">${esc(T('new.take_photo'))}</label>
+      <label><input type="file" hidden data-pick="${esc(k)}" data-cam="1" accept="video/*" capture="environment">${esc(T('new.take_video'))}</label>
+      <label><input type="file" hidden data-pick="${esc(k)}" accept="image/*,video/*" multiple>${esc(T('new.from_gallery'))}</label></div></div>`
+    : `<label class="btn pick"><input type="file" hidden data-pick="${esc(k)}" accept="image/*,video/*" multiple>+ ${esc(T('new.add_media'))}</label>`;
+  // Photos taken with the camera are also kept on the phone (the browser cannot write to the gallery, so this goes to Downloads).
+  const keepOnPhone = f => { try {
+    const ext = (f.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg').replace('quicktime', 'mov'), d = new Date(), p = n => String(n).padStart(2, '0');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(f);
+    a.download = `HSE_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${ext}`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  } catch (e) { /* saving the copy is a bonus; the inspection photo is kept anyway */ } };
   const itemHtml = (c, n) => {
     const it = slot(c.key), hint = lbl(c, 'hint'), rl = lbl(c, 'reading_label');
     return `<section class="item" data-key="${esc(c.key)}">
@@ -526,8 +535,9 @@ VIEWS.new = async (_, tok) => {
     if (t.name === 'n-type') { dr.type = t.value; drawForm(); save(); }
     else if (t.dataset.sevr) { slot(t.dataset.sevr).sev = t.value; drawResultIfNeeded(); bar(); save(); }
     else if (t.dataset.pick) {
-      const k = t.dataset.pick, it = slot(k), picked = [...t.files]; t.value = '';
+      const k = t.dataset.pick, it = slot(k), picked = [...t.files], fromCam = !!t.dataset.cam; t.value = '';
       for (const f of picked) {
+        if (fromCam) keepOnPhone(f);
         const kind = f.type.startsWith('video/') ? 'video' : f.type.startsWith('image/') ? 'photo' : null;
         if (!kind) { toast(T('err.not_media'), 1); continue; }
         if (kind === 'video' && f.size > 40 * 1024 * 1024) { toast(T('err.video_big'), 1); continue; }
