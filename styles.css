@@ -392,3 +392,23 @@ input:focus, select:focus, textarea:focus { background: #fff; outline: 2px solid
 .sevpick, .sevs { gap: 6px; }
 .sevpick { gap: 6px; }
 .sevpick span { border: 1px solid var(--line); border-radius: 8px; margin-right: 0; background: #fff; }
+
+/* ---- shading (v10): soft depth so buttons, choices and cards read as different things ---- */
+.btn { box-shadow: 0 1px 2px rgba(60,45,30,.12), 0 2px 6px rgba(60,45,30,.06); transition: box-shadow .15s, transform .05s, background .15s; }
+.btn:hover { box-shadow: 0 2px 4px rgba(60,45,30,.16), 0 4px 10px rgba(60,45,30,.08); }
+.btn:active { transform: translateY(1px); box-shadow: 0 0 1px rgba(60,45,30,.2) inset; }
+.btn.primary { box-shadow: 0 2px 6px rgba(184,50,31,.35); }
+.btn.pick { background: #fff4ee; border-color: #f0c9bb; color: var(--orange-dark); }
+.btn.pick:hover { background: #ffeadf; }
+.btn.sm { background: #eef1f4; border-color: #d9dfe5; }
+.sevpick span { background: linear-gradient(#fff, #f5f2ed); box-shadow: 0 1px 2px rgba(60,45,30,.14); }
+.sevpick label:hover span { background: #fff; box-shadow: 0 2px 5px rgba(60,45,30,.2); }
+.sevpick input:checked + span { background: var(--sc); box-shadow: inset 0 2px 4px rgba(0,0,0,.25); border-color: var(--sc); }
+.item, .panel { background: #fff; box-shadow: 0 1px 3px rgba(60,45,30,.1), 0 6px 16px rgba(60,45,30,.05); border: 1px solid var(--line); }
+.item { padding: 16px 18px; margin-bottom: 14px; }
+input, select, textarea { box-shadow: inset 0 1px 2px rgba(60,45,30,.08); }
+.chip { background: #fff; box-shadow: 0 1px 2px rgba(60,45,30,.12); }
+.chip.on { box-shadow: inset 0 1px 3px rgba(0,0,0,.35); }
+.seg span { box-shadow: 0 1px 2px rgba(60,45,30,.12); }
+.submitbar { box-shadow: 0 -4px 18px rgba(60,45,30,.14); }
+.tagcard { box-shadow: 0 1px 3px rgba(60,45,30,.12), 0 8px 18px rgba(60,45,30,.06); }
